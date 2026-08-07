@@ -3,8 +3,8 @@
 > Read this file, `docs/DECISIONS.md`, `BUILDPLAN.md`, and `git status` before
 > doing any work in a new session.
 
-**Current phase:** 8 — Recovery, accessibility, cross-platform setup, smoke hardening
-**Overall:** 7 of 9 phases complete
+**Current phase:** 9 — Documentation, final quality/security pass, final report
+**Overall:** 8 of 9 phases complete
 
 ## Environment (verified 2026-08-06)
 
@@ -87,10 +87,19 @@
 - `app/web/app.py` — routes reading real state
 - `app/web/templates/` — all 11 screens + base + macros
 
+### Phase 8 — Recovery & accessibility ✅ (commits `8854cf5`, `c658bbc`)
+- `app/services/jobs.py` — create / pause / resume / cancel, preserving output
+- POST routes so the UI is operable; forms return problems + what was typed
+- `scripts/setup_{macos,linux}.sh`, `setup_windows.ps1`, `verify_install.py`
+- `tests/integration/test_recovery.py` — real SIGKILL, real lock contention
+- `tests/unit/test_accessibility.py` — computed contrast, keyboard, semantics
+- **4 WCAG AA failures in the supplied palette fixed**, documented in
+  `docs/UX_NOTES.md`
+
 ## Tests
 
-**829 passing**, 0 failing. ruff clean, mypy clean (44 files), pre-publish
-audit clean (92 tracked files), smoke test green (9 checks).
+**947 passing**, 0 failing. ruff clean, mypy clean (45 files), pre-publish
+audit clean (115 tracked files), smoke test green (9 checks).
 Plus 5 live Ollama tests (opt-in marker `live_ollama`, deselected in CI) that
 pass against the real Ollama 0.32.6 + qwen2.5vl:7b on this machine.
 
@@ -117,6 +126,9 @@ pass against the real Ollama 0.32.6 + qwen2.5vl:7b on this machine.
 - `tests/unit/test_collections.py` — 55
 - `tests/unit/test_redaction.py` — 76 (incl. key false-positive regressions)
 - `tests/unit/test_web_ui.py` — 64
+- `tests/unit/test_job_control.py` — 43
+- `tests/unit/test_accessibility.py` — 56
+- `tests/integration/test_recovery.py` — 19
 
 ## Failures / blockers
 
@@ -140,21 +152,24 @@ None.
 
 ## Next action
 
-Phase 8 — recovery, accessibility, cross-platform, smoke hardening.
+Phase 9 — the final pass. This is the last phase.
 
-1. Pause / resume / cancel: routes + worker handling, preserving valid output.
-2. Recovery tests: kill mid-stage, sleep/wake, unmounted output root, database
-   locked by another process.
-3. `scripts/setup_macos.sh`, `scripts/setup_windows.ps1`, `scripts/setup_linux.sh`,
-   `scripts/verify_install.py` — checks and guidance, **not** installers.
-4. Extend `video-to-llm smoke-test` to cover stages 1–2 on generated media plus
-   a collection build, still with no network.
-5. Accessibility pass: keyboard operation end to end, focus order, contrast
-   check against WCAG 2.2 AA for the Modernist palette.
-6. POST routes for the forms already rendered (new job, new collection) so the
-   UI is operable, not just readable.
-
-Then Phase 9: docs, final quality/security pass, `docs/FINAL_BUILD_REPORT.md`.
+1. Write the remaining docs, which are currently placeholder stubs:
+   `LOCAL_SETUP.md`, `PIPELINE_CONTRACT.md`, `LOCAL_OLLAMA.md`, `COLLECTIONS.md`,
+   `OPERATIONS.md`, `RECOVERY.md`, `IMPORT_EXPORT.md`.
+   (`SECURITY.md`, `SECURE_GITHUB_EXPORT.md`, `UX_NOTES.md`, `DECISIONS.md` are
+   already written.)
+2. Extend `video-to-llm smoke-test` to cover stages 1–2 on generated media and a
+   collection build, still with no network.
+3. Install `pre-commit` in the dev extra, or drop `.pre-commit-config.yaml` —
+   right now it is declared but not installed, which is why every commit uses
+   `git -c core.hooksPath=/dev/null`.
+4. Full quality pass: `ruff format --check`, `ruff check`, `mypy app`, full
+   suite, `pre_publish_audit.py`, smoke test, and one live Ollama run.
+5. Write `docs/FINAL_BUILD_REPORT.md` covering: what was built, the definition
+   of done in spec §13 item by item, every deviation with its justification,
+   known limitations, and how to verify each claim.
+6. Final commit.
 
 ## Continuation prompt
 
