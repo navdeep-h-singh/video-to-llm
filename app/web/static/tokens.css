@@ -96,7 +96,10 @@ a { color: var(--color-accent); text-underline-offset: 3px; }
 img { display: block; max-width: 100%; }
 figure { margin: 0; }
 
-.text-muted { color: color-mix(in srgb, var(--color-text) 55%, transparent); }
+/* 65%, not 55%: the design's value lands at 3.66:1, and muted text is still
+   text. A secondary label that fails contrast is one some readers cannot
+   use at all. */
+.text-muted { color: color-mix(in srgb, var(--color-text) 65%, transparent); }
 .mono { font-variant-numeric: tabular-nums; letter-spacing: .02em; }
 
 /* Focus is never removed, only restyled. Keyboard operation is a requirement,
@@ -131,9 +134,14 @@ figure { margin: 0; }
 }
 .btn svg { display: block; }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.btn-primary { background: var(--color-accent); color: var(--color-bg); }
-.btn-primary:hover { background: var(--color-accent-600); }
-.btn-primary:active { background: var(--color-accent-700); }
+/* The brand accent (#ec3013) is 3.76:1 against the page background. That
+   clears the 3:1 bar for a border, a focus ring, or a status mark, but not
+   the 4.5:1 a 14px button label needs. Filled buttons therefore use
+   accent-700 (6.41:1) while the accent itself keeps every non-text role, so
+   the palette still reads as the design intended. */
+.btn-primary { background: var(--color-accent-700); color: var(--color-bg); }
+.btn-primary:hover { background: var(--color-accent-800); }
+.btn-primary:active { background: var(--color-accent-900); }
 .btn-secondary { border-color: var(--color-divider); }
 .btn-secondary:hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
 .btn-secondary:active { background: color-mix(in srgb, var(--color-text) 14%, transparent); }
@@ -175,7 +183,7 @@ textarea.input { min-height: 90px; resize: vertical; }
 .seg { display: inline-flex; overflow: hidden; border: 1px solid var(--color-divider); }
 .seg-opt { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; font-size: 13px; cursor: pointer; }
 .seg-opt + .seg-opt { border-left: 1px solid var(--color-divider); }
-.seg-opt:has(input:checked) { background: var(--color-accent); color: var(--color-bg); }
+.seg-opt:has(input:checked) { background: var(--color-accent-700); color: var(--color-bg); }
 .seg-opt:not(:has(input:checked)):hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
 .seg-opt:has(input:focus-visible) { outline: 2px solid var(--color-accent); outline-offset: -2px; }
 
@@ -186,8 +194,8 @@ textarea.input { min-height: 90px; resize: vertical; }
 }
 .card-kicker { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-accent); }
 .card-title { font-family: var(--font-heading); font-weight: var(--font-heading-weight); font-size: 17px; line-height: 1.2; }
-.card-body { margin: 0; font-size: 13px; opacity: 0.8; flex: 1; }
-.card-meta { display: flex; align-items: center; gap: 6px; font-size: 11px; color: color-mix(in srgb, var(--color-text) 50%, transparent); }
+.card-body { margin: 0; font-size: 13px; flex: 1; }
+.card-meta { display: flex; align-items: center; gap: 6px; font-size: 11px; color: color-mix(in srgb, var(--color-text) 65%, transparent); }
 .elev-sm { box-shadow: var(--shadow-sm); }
 .elev-md { box-shadow: var(--shadow-md); }
 .elev-lg { box-shadow: var(--shadow-lg); }
@@ -203,7 +211,7 @@ textarea.input { min-height: 90px; resize: vertical; }
 .table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .table th {
   text-align: left; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
-  color: color-mix(in srgb, var(--color-text) 60%, transparent);
+  color: color-mix(in srgb, var(--color-text) 65%, transparent);
   padding: var(--space-2); border-bottom: 2px solid var(--color-divider);
 }
 .table td { padding: var(--space-2); border-bottom: 1px solid var(--color-divider); }
@@ -249,7 +257,7 @@ textarea.input { min-height: 90px; resize: vertical; }
   border-right: 2px solid var(--color-divider);
 }
 .navgroup + .navgroup { margin-top: var(--space-6); }
-.navgroup > h6 { margin-bottom: var(--space-2); color: color-mix(in srgb, var(--color-text) 55%, transparent); }
+.navgroup > h6 { margin-bottom: var(--space-2); color: color-mix(in srgb, var(--color-text) 65%, transparent); }
 .navlink {
   display: flex; align-items: center; gap: var(--space-2);
   padding: 7px 10px; font-size: 14px; text-decoration: none; color: var(--color-text);
@@ -262,20 +270,22 @@ textarea.input { min-height: 90px; resize: vertical; }
 .page-head { display: flex; align-items: flex-start; gap: var(--space-4); margin-bottom: var(--space-6); }
 .page-head h1 { font-size: 32px; margin: 0; }
 .page-head .actions { margin-left: auto; display: flex; gap: var(--space-2); }
-.page-sub { margin: var(--space-1) 0 0; font-size: 14px; color: color-mix(in srgb, var(--color-text) 60%, transparent); }
+.page-sub { margin: var(--space-1) 0 0; font-size: 14px; color: color-mix(in srgb, var(--color-text) 65%, transparent); }
 
 /* — status: text + icon + colour, never colour alone — */
 .status { display: inline-flex; align-items: center; gap: var(--space-2); font-size: 13px; }
 .status-dot { width: 10px; height: 10px; flex: none; border: 1.5px solid var(--color-text); background: var(--color-text); }
-.status-draft   .status-dot { background: transparent; border-color: var(--color-neutral-500); }
-.status-ready   .status-dot { background: transparent; border-color: var(--color-neutral-500); }
+/* neutral-600, not neutral-500: a status marker carries meaning, so it needs
+   3:1 against the page. neutral-500 is 2.59:1. */
+.status-draft   .status-dot { background: transparent; border-color: var(--color-neutral-600); }
+.status-ready   .status-dot { background: transparent; border-color: var(--color-neutral-600); }
 .status-running .status-dot { background: var(--color-accent); border-color: var(--color-accent); }
 .status-waiting .status-dot { background: var(--color-accent); border-color: var(--color-accent); transform: rotate(45deg); }
-.status-paused  .status-dot { background: var(--color-neutral-500); border-color: var(--color-neutral-500); }
+.status-paused  .status-dot { background: var(--color-neutral-600); border-color: var(--color-neutral-600); }
 .status-attention .status-dot { background: var(--color-accent); border-color: var(--color-accent); transform: rotate(45deg); }
 .status-done    .status-dot { background: var(--color-text); border-color: var(--color-text); }
 .status-gaps    .status-dot { background: var(--color-neutral-100); border-color: var(--color-text); transform: rotate(45deg); }
-.status-cancelled .status-dot { background: var(--color-neutral-300); border-color: var(--color-neutral-500); }
+.status-cancelled .status-dot { background: var(--color-neutral-300); border-color: var(--color-neutral-600); }
 
 .bar { height: 6px; background: var(--color-neutral-300); overflow: hidden; }
 .bar > span { display: block; height: 100%; background: var(--color-text); }
@@ -290,7 +300,7 @@ textarea.input { min-height: 90px; resize: vertical; }
 .panel + .panel { margin-top: var(--space-4); }
 .panel-head { display: flex; align-items: baseline; gap: var(--space-3); margin-bottom: var(--space-3); }
 
-.empty { padding: var(--space-8); text-align: center; color: color-mix(in srgb, var(--color-text) 55%, transparent); }
+.empty { padding: var(--space-8); text-align: center; color: color-mix(in srgb, var(--color-text) 65%, transparent); }
 
 .pick {
   display: block; width: 100%; text-align: left; cursor: pointer;
@@ -307,7 +317,7 @@ textarea.input { min-height: 90px; resize: vertical; }
 
 .timeline { list-style: none; margin: 0; padding: 0; font-size: 13px; }
 .timeline li { display: flex; gap: var(--space-3); padding: var(--space-2) 0; border-bottom: 1px solid var(--color-divider); }
-.timeline time { flex: none; width: 72px; color: color-mix(in srgb, var(--color-text) 55%, transparent); }
+.timeline time { flex: none; width: 72px; color: color-mix(in srgb, var(--color-text) 65%, transparent); }
 
 /* Below 1024px the sidebar stacks above the content rather than disappearing:
    a navigation the user cannot reach is worse than one that takes vertical
