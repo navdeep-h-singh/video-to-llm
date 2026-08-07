@@ -111,5 +111,144 @@ def _run_checks(work: Path, steps: list[tuple[str, bool, str]]) -> None:
 
         # Reconciliation is safe to repeat
         steps.append(("recovery is idempotent", not reconcile(connection, work).changed, ""))
+
+        _pipeline_checks(connection, work, job_id, steps)
     finally:
         connection.close()
+
+
+def _pipeline_checks(connection, work: Path, job_id: str, steps: list) -> None:
+    """Stages 1-2 on generated media, then a collection built from the result.
+
+    Everything is synthesised here: FFmpeg draws the video from a colour pattern
+    and a tone. No personal media, no network, no provider, no credential.
+    """
+    import shutil
+
+    if not (shutil.which("ffmpeg") and shutil.which("ffprobe")):
+        steps.append(("pipeline on generated media", True, "skipped - FFmpeg not installed"))
+        return
+
+    from app.core.config import Settings
+    from app.pipeline.stages import StageContext, run_assembly_stage, run_frames_stage
+
+    settings = Settings().with_output_root(work)
+    source = _generate_clip(work / "source" / "smoke.mp4")
+    if source is None:
+        steps.append(("pipeline on generated media", False, "could not generate a test clip"))
+        return
+
+    video_id = new_id()
+    connection.execute(
+        "INSERT INTO job_videos (id, job_id, source_path, display_name, sequence,"
+        " status, duration_seconds, output_dir, created_at, updated_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (
+            video_id,
+            job_id,
+            str(source),
+            "smoke.mp4",
+            0,
+            "pending",
+            4.0,
+            f"{job_id}/{video_id}",
+            utc_now(),
+            utc_now(),
+        ),
+    )
+
+    context = StageContext(
+        connection=connection,
+        settings=settings,
+        job_id=job_id,
+        job_video_id=video_id,
+        source_path=source,
+        output_dir=work / job_id / video_id,
+        interval_ms=2000,
+    )
+
+    try:
+        frames = run_frames_stage(context, make_api_copies=False)
+    except Exception as error:
+        steps.append(("frames from generated media", False, redacted_exception_text(error)))
+        return
+    steps.append(("frames from generated media", frames >= 2, f"{frames} pictures"))
+
+    try:
+        assembled = run_assembly_stage(context, display_name="smoke.mp4")
+    except Exception as error:
+        steps.append(("assembled document", False, redacted_exception_text(error)))
+        return
+    steps.append(("assembled document", assembled.is_file(), assembled.name))
+
+    # A collection built from that output - local, free, and no provider call.
+    try:
+        from app.collections.build import FULL_FILENAME, build_collection
+        from app.collections.model import (
+            assess_source,
+            create_collection,
+            load_collection,
+            set_sources,
+        )
+
+        connection.execute("UPDATE job_videos SET status = 'completed' WHERE id = ?", (video_id,))
+        collection_id = create_collection(connection, name="Smoke collection")
+        source_entry = assess_source(connection, video_id, work)
+        set_sources(connection, collection_id, [source_entry] if source_entry else [])
+        collection = load_collection(connection, collection_id)
+        if collection is None:
+            steps.append(("collection built from that output", False, "collection not found"))
+            return
+        result = build_collection(connection, collection, output_root=work)
+    except Exception as error:
+        steps.append(("collection built from that output", False, redacted_exception_text(error)))
+        return
+
+    built = (result.directory / FULL_FILENAME).is_file()
+    steps.append(
+        ("collection built from that output", built, f"about {result.total_tokens:,} tokens")
+    )
+
+
+def _generate_clip(destination: Path) -> Path | None:
+    """A few seconds of colour pattern and tone, drawn by FFmpeg itself."""
+    import shutil
+    import subprocess
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return None
+
+    result = subprocess.run(
+        [
+            ffmpeg,
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc2=size=320x180:rate=10:duration=4",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=4",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-preset",
+            "ultrafast",
+            "-c:a",
+            "aac",
+            "-shortest",
+            "-t",
+            "4",
+            str(destination),
+        ],
+        capture_output=True,
+        timeout=120,
+        check=False,
+    )
+    return destination if result.returncode == 0 and destination.is_file() else None

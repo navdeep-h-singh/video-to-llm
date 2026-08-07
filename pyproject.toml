@@ -30,6 +30,7 @@ dev = [
     "mypy>=1.13",
     "types-requests",
     "respx>=0.21",
+    "pre-commit>=4.0",
 ]
 
 [project.scripts]

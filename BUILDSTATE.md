@@ -3,8 +3,8 @@
 > Read this file, `docs/DECISIONS.md`, `BUILDPLAN.md`, and `git status` before
 > doing any work in a new session.
 
-**Current phase:** 9 — Documentation, final quality/security pass, final report
-**Overall:** 8 of 9 phases complete
+**Current phase:** — none, the build is complete
+**Overall:** 9 of 9 phases complete
 
 ## Environment (verified 2026-08-06)
 
@@ -96,10 +96,18 @@
 - **4 WCAG AA failures in the supplied palette fixed**, documented in
   `docs/UX_NOTES.md`
 
+### Phase 9 — Docs and final pass ✅
+- All eleven `docs/*.md` written
+- `smoke-test` extended to 12 checks incl. stages 1-2 and a collection build
+- `relative_to_root()` — fixes symlinked-path failure found by the new smoke check
+- `pre-commit` added to the dev extra
+- `docs/FINAL_BUILD_REPORT.md`
+
 ## Tests
 
-**947 passing**, 0 failing. ruff clean, mypy clean (45 files), pre-publish
-audit clean (115 tracked files), smoke test green (9 checks).
+**951 passing**, 0 failing. ruff format + check clean, mypy clean (45 files),
+pre-publish audit clean (117 tracked files), smoke test green (12 checks),
+5 live Ollama tests passing.
 Plus 5 live Ollama tests (opt-in marker `live_ollama`, deselected in CI) that
 pass against the real Ollama 0.32.6 + qwen2.5vl:7b on this machine.
 
@@ -152,28 +160,21 @@ None.
 
 ## Next action
 
-Phase 9 — the final pass. This is the last phase.
+None. The build is complete — see `docs/FINAL_BUILD_REPORT.md`, which records
+what was built, the definition of done item by item, every deviation with its
+justification, the defects found during the build, and the known limitations.
 
-1. Write the remaining docs, which are currently placeholder stubs:
-   `LOCAL_SETUP.md`, `PIPELINE_CONTRACT.md`, `LOCAL_OLLAMA.md`, `COLLECTIONS.md`,
-   `OPERATIONS.md`, `RECOVERY.md`, `IMPORT_EXPORT.md`.
-   (`SECURITY.md`, `SECURE_GITHUB_EXPORT.md`, `UX_NOTES.md`, `DECISIONS.md` are
-   already written.)
-2. Extend `video-to-llm smoke-test` to cover stages 1–2 on generated media and a
-   collection build, still with no network.
-3. Install `pre-commit` in the dev extra, or drop `.pre-commit-config.yaml` —
-   right now it is declared but not installed, which is why every commit uses
-   `git -c core.hooksPath=/dev/null`.
-4. Full quality pass: `ruff format --check`, `ruff check`, `mypy app`, full
-   suite, `pre_publish_audit.py`, smoke test, and one live Ollama run.
-5. Write `docs/FINAL_BUILD_REPORT.md` covering: what was built, the definition
-   of done in spec §13 item by item, every deviation with its justification,
-   known limitations, and how to verify each claim.
-6. Final commit.
+The most important limitations to carry forward:
+
+- CI has never executed (no git remote). **Windows and Linux are untested.**
+- No cloud provider has ever been called. Adapters are mock-tested only.
+  Local Ollama *is* verified live.
+- Transcription accuracy on real material is unmeasured.
+- Frame-scrubber interactivity, targeted reruns, and drag-to-reorder are not
+  built; their data models are.
 
 ## Continuation prompt
 
-> Continue the autonomous build of the Video-to-LLM Pipeline from this
-> repository root. Read `BUILDSTATE.md`, `docs/DECISIONS.md`, `BUILDPLAN.md`
-> and `git status`, then continue from **Next action** above. Commit tested
-> work at each phase boundary.
+The build is finished, so there is nothing to continue. To pick up the
+remaining work listed under **Next action**, read `docs/FINAL_BUILD_REPORT.md`
+first — the limitations section is the backlog.

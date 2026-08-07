@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from app.core.artifacts import register_artifact
+from app.core.artifacts import register_artifact, relative_to_root
 from app.core.config import Settings
 from app.core.db import new_id, utc_now
 from app.core.logging import get_logger
@@ -211,7 +211,7 @@ def run_frames_stage(context: StageContext, *, make_api_copies: bool = True) -> 
         "UPDATE job_videos SET frame_count = ?, output_dir = ?, updated_at = ? WHERE id = ?",
         (
             len(result.frames),
-            str(context.output_dir.relative_to(context.output_root)),
+            relative_to_root(context.output_dir, context.output_root),
             utc_now(),
             context.job_video_id,
         ),

@@ -160,6 +160,23 @@ def cleanup_temp_files(root: Path) -> list[Path]:
 # ── Registration ──────────────────────────────────────────────────────────
 
 
+def relative_to_root(path: Path, output_root: Path) -> str:
+    """Express *path* relative to *output_root*, resolving symlinks on both sides.
+
+    Both are resolved first because otherwise one symlinked component makes
+    ``relative_to`` fail on paths that are genuinely inside the root. On macOS
+    ``/var`` is a symlink to ``/private/var``, so a temporary output root
+    produces exactly that mismatch; a symlinked home directory or an external
+    mount does the same on any platform.
+    """
+    resolved_path = Path(path).resolve()
+    resolved_root = Path(output_root).resolve()
+    try:
+        return resolved_path.relative_to(resolved_root).as_posix()
+    except ValueError as error:
+        raise ValueError(f"{path} is not inside the output folder {output_root}") from error
+
+
 def register_artifact(
     connection: sqlite3.Connection,
     *,
@@ -187,7 +204,7 @@ def register_artifact(
             f"refusing to register {path} — the artifact does not exist on disk"
         )
 
-    relative = path.relative_to(Path(output_root)).as_posix()
+    relative = relative_to_root(path, output_root)
     checksum = sha256 if sha256 is not None else (sha256_file(path) if path.is_file() else None)
     size = path.stat().st_size if path.is_file() else None
     artifact_id = new_id()

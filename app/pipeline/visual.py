@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from app.core.artifacts import register_artifact, write_json
+from app.core.artifacts import register_artifact, relative_to_root, write_json
 from app.core.db import new_id, utc_now
 from app.core.logging import get_logger
 from app.core.redaction import redacted_exception_text
@@ -233,7 +233,7 @@ def run_visual_analysis(
             input_tokens=analysis.input_tokens,
             output_tokens=analysis.output_tokens,
             latency_ms=analysis.latency_ms,
-            artifact_path=str(artifact_path.relative_to(output_root)),
+            artifact_path=relative_to_root(artifact_path, output_root),
             artifact_sha256=checksum,
             retry_history=analysis.retry_history,
         )

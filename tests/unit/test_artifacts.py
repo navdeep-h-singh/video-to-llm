@@ -237,3 +237,69 @@ def test_verify_detects_a_modified_artifact(db, tmp_path):
 
 def test_verify_returns_false_for_an_unregistered_path(db, tmp_path):
     assert verify_artifact(db, tmp_path, "never-registered.txt") is False
+
+
+# ── Paths under a symlink ─────────────────────────────────────────────────
+#
+# Found by the smoke test: on macOS /var is a symlink to /private/var, so a
+# temporary output root gave `relative_to` one resolved path and one unresolved
+# path and it raised. The same happens with a symlinked home directory or an
+# external mount, so this is a portability bug rather than a test artefact.
+
+
+def test_a_path_under_a_symlinked_root_resolves(tmp_path):
+    from app.core.artifacts import relative_to_root
+
+    real_root = tmp_path / "real"
+    real_root.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real_root, target_is_directory=True)
+
+    target = real_root / "job" / "assembled.txt"
+    target.parent.mkdir(parents=True)
+    target.write_text("x", encoding="utf-8")
+
+    # The root is reached through the symlink, the file through the real path.
+    assert relative_to_root(target, link) == "job/assembled.txt"
+
+
+def test_a_root_reached_directly_and_a_path_through_a_symlink_also_resolves(tmp_path):
+    real_root = tmp_path / "real"
+    (real_root / "job").mkdir(parents=True)
+    target = real_root / "job" / "assembled.txt"
+    target.write_text("x", encoding="utf-8")
+
+    link = tmp_path / "link"
+    link.symlink_to(real_root, target_is_directory=True)
+
+    from app.core.artifacts import relative_to_root
+
+    assert relative_to_root(link / "job" / "assembled.txt", real_root) == "job/assembled.txt"
+
+
+def test_registering_through_a_symlinked_root_stores_a_clean_relative_path(db, tmp_path):
+    real_root = tmp_path / "real"
+    real_root.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real_root, target_is_directory=True)
+
+    target = real_root / "out.txt"
+    write_text(target, "content")
+    register_artifact(db, output_root=link, path=target, kind="assembled", job_id="j1")
+
+    stored = db.execute("SELECT relative_path FROM artifacts").fetchone()["relative_path"]
+    assert stored == "out.txt"
+    assert not stored.startswith("/")
+
+
+def test_a_path_genuinely_outside_the_root_is_still_refused(tmp_path):
+    from app.core.artifacts import relative_to_root
+
+    root = tmp_path / "root"
+    root.mkdir()
+    outside = tmp_path / "elsewhere" / "file.txt"
+    outside.parent.mkdir()
+    outside.write_text("x", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="not inside the output folder"):
+        relative_to_root(outside, root)
