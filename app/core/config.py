@@ -106,7 +106,7 @@ class SamplingSettings:
         return SAMPLING_PRESETS.get(self.preset, 2.0)
 
     def interval_ms(self) -> int:
-        return int(round(self.interval_seconds() * 1000))
+        return round(self.interval_seconds() * 1000)
 
     def validate(self) -> None:
         if self.preset not in {*SAMPLING_PRESETS, "custom"}:
