@@ -1,7 +1,7 @@
 # Handoff — Video → LLM
 
 **For:** a fresh session with full context.
-**Repo:** `/Users/navdeep/My Builds/Video Processor for LLMs`
+**Repo:** `~/My Builds/Video Processor for LLMs`
 **HEAD:** `ba6aca8` · 986 tests passing · ruff, mypy, audit, smoke all clean.
 
 ---
@@ -45,7 +45,7 @@ land in a live demo".
 ## 2. Run it
 
 ```bash
-cd "/Users/navdeep/My Builds/Video Processor for LLMs"
+cd ~/"My Builds/Video Processor for LLMs"
 uv run video-to-llm start          # interface + worker, http://127.0.0.1:8712
 uv run video-to-llm doctor         # readiness
 uv run video-to-llm smoke-test     # 12 checks, no network

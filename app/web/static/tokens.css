@@ -505,6 +505,41 @@ select.input { appearance: auto; }
 .chosen-list .num { font-variant-numeric: tabular-nums; color: var(--color-neutral-700); width: 22px; }
 .chosen-list .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
+/* The collection wizard's steps. Links to real sections of the page, not a
+   decorative header — the version before this named two steps that had no
+   interface behind them at all. */
+.steps {
+  display: flex; flex-wrap: wrap; gap: var(--space-4);
+  border: 1px solid var(--color-divider); padding: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+.step {
+  display: inline-flex; align-items: center; gap: var(--space-2);
+  font-size: 13px; color: var(--color-text); text-decoration: none;
+  padding: 2px 4px;
+}
+.step:hover { background: color-mix(in srgb, var(--color-text) 8%, transparent); }
+.step:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+
+.order-list { list-style: none; margin: var(--space-2) 0 0; padding: 0; font-size: 13.5px; }
+.order-item {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: 6px var(--space-2); border: 1px solid var(--color-divider);
+  background: var(--color-bg); cursor: grab;
+}
+.order-item + .order-item { border-top: 0; }
+.order-item.is-dragging { opacity: 0.5; }
+.order-item .num { color: var(--color-neutral-700); width: 22px; flex: none; }
+.order-item .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Disabled move buttons keep their space so the row does not reflow as an item
+   travels to an end of the list. */
+.order-item .btn[disabled] { visibility: hidden; }
+
+.estimate { border: 1px solid var(--color-divider); padding: var(--space-3); margin-top: var(--space-2); }
+.estimate-facts { display: flex; flex-wrap: wrap; gap: var(--space-6); }
+.estimate-facts > div { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
+.estimate-facts strong { font-size: 17px; font-family: var(--font-heading); font-weight: 800; }
+
 .keys { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-3); }
 .key-row {
   display: flex; gap: var(--space-3); align-items: center; flex-wrap: wrap;

@@ -24,6 +24,7 @@ from app.collections.build import (
     CollectionBuildError,
     build_collection,
     load_sources,
+    preview_build,
     split_at_sections,
 )
 from app.collections.model import (
@@ -37,6 +38,7 @@ from app.collections.model import (
     load_collection,
     next_version,
     set_sources,
+    versions_of,
 )
 from app.collections.tokens import (
     CHARS_PER_TOKEN,
@@ -737,3 +739,139 @@ def test_the_collection_records_its_current_version(db, root):
     build_collection(db, collection, output_root=root)
 
     assert load_collection(db, collection.id).current_version == 1
+
+
+# ── The pre-build estimate ────────────────────────────────────────────────
+#
+# The estimate has to be produced by the same code as the build. A quicker
+# approximation living somewhere else would be a second implementation of the
+# packing rule, and the day the two disagreed the form would be promising
+# something the build then contradicted.
+
+
+def test_the_preview_matches_what_the_build_produces(db, root):
+    """The whole point of the number on the form is that it is the real one."""
+    add_video(db, root, "v1", body="x" * 20000)
+    add_video(db, root, "v2", body="y" * 20000, sequence=1)
+    collection = make_collection(db, root, ["v1", "v2"])
+
+    preview = preview_build(collection, output_root=root)
+    result = build_collection(db, collection, output_root=root)
+
+    assert preview.total_tokens == result.total_tokens
+    assert preview.video_count == 2
+
+
+def test_the_preview_counts_the_same_parts_the_build_writes(db, root):
+    add_video(db, root, "v1", body="x" * 40000)
+    add_video(db, root, "v2", body="y" * 40000, sequence=1)
+    add_video(db, root, "v3", body="z" * 40000, sequence=2)
+    collection = make_collection(
+        db, root, ["v1", "v2", "v3"], mode=CollectionMode.PACKS, token_limit=15000
+    )
+
+    preview = preview_build(collection, output_root=root)
+    result = build_collection(db, collection, output_root=root)
+
+    assert preview.pack_count == result.pack_count
+    assert preview.pack_count > 1
+
+
+def test_the_preview_writes_nothing(db, root):
+    """It runs while the user is still filling the form in. Leaving a directory
+    behind per keystroke would fill the output folder with abandoned builds."""
+    add_video(db, root, "v1")
+    collection = make_collection(db, root, ["v1"])
+
+    preview_build(collection, output_root=root)
+
+    assert not (root / "collections").exists()
+    assert db.execute("SELECT COUNT(*) FROM collection_builds").fetchone()[0] == 0
+
+
+def test_one_document_mode_has_no_part_count(db, root):
+    """`None` rather than 1: there are no parts, and reporting "1 part" would
+    describe a thing the build does not produce."""
+    add_video(db, root, "v1")
+    collection = make_collection(db, root, ["v1"])
+
+    assert preview_build(collection, output_root=root).pack_count is None
+
+
+def test_an_unbuildable_budget_is_reported_not_raised(db, root):
+    """The user is mid-form. An exception here would be a failed build attempt
+    in place of the advice that stops them making one."""
+    add_video(db, root, "v1")
+    collection = make_collection(
+        db, root, ["v1"], mode=CollectionMode.PACKS, token_limit=1000, reserve_tokens=1000
+    )
+
+    preview = preview_build(collection, output_root=root)
+    assert preview.problem
+    assert "raise" in preview.problem.lower() or "lower" in preview.problem.lower()
+
+
+def test_the_preview_carries_the_source_warnings_forward(db, root):
+    add_video(db, root, "v1", descriptions=False)
+    collection = make_collection(db, root, ["v1"])
+
+    assert any("descriptions" in w for w in preview_build(collection, output_root=root).warnings)
+
+
+def test_the_preview_calls_no_provider(db, root, monkeypatch):
+    """Building a collection is local and free, and so is looking at one before
+    you build it."""
+    import app.providers.base as provider_base
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("a preview must never contact a provider")
+
+    monkeypatch.setattr(provider_base, "VisualProvider", refuse, raising=False)
+
+    add_video(db, root, "v1")
+    collection = make_collection(db, root, ["v1"])
+    assert preview_build(collection, output_root=root).video_count == 1
+
+
+# ── Choosing a version ────────────────────────────────────────────────────
+
+
+def test_every_version_of_a_video_is_offered(db, root):
+    """Reruns create versions. A form that could only ever pin the newest would
+    make the versioning invisible from the interface — and invisible is the same
+    as absent to the person using it."""
+    add_video(db, root, "v1", sequence=0, version=1)
+    db.execute(
+        "INSERT INTO job_videos (id, job_id, source_path, display_name, sequence,"
+        " version, is_active_version, status, duration_seconds, output_dir,"
+        " created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            "v1b",
+            "j1",
+            "/src/v1.mp4",
+            "v1.mp4",
+            0,
+            2,
+            0,
+            "completed",
+            600.0,
+            "j1/v1b",
+            utc_now(),
+            utc_now(),
+        ),
+    )
+
+    offered = versions_of(db, "v1")
+    assert [v.version for v in offered] == [2, 1]
+    assert [v.job_video_id for v in offered] == ["v1b", "v1"]
+
+
+def test_the_version_in_use_is_named_as_such(db, root):
+    add_video(db, root, "v1")
+    only = versions_of(db, "v1")[0]
+    assert only.is_active
+    assert "in use" in only.label
+
+
+def test_versions_of_an_unknown_video_is_empty_not_an_error(db):
+    assert versions_of(db, "nothing-like-this") == []

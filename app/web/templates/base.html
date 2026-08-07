@@ -8,7 +8,10 @@
   {# No external stylesheet, font service, or script. The badge in the header
      promises nothing is uploaded; a CDN request would contradict it. #}
 </head>
-<body data-has-running="{{ 'true' if has_running else 'false' }}" data-job-id="{{ live_job_id or '' }}">
+<body data-has-running="{{ 'true' if has_running else 'false' }}"
+      data-job-id="{{ live_job_id or '' }}"
+      data-fingerprint="{{ progress_fingerprint | default('', true) }}"
+      data-reload="{% block reload_policy %}auto{% endblock %}">
 <a class="skip-link" href="#main">Skip to the main content</a>
 
 <div class="app">
@@ -55,25 +58,69 @@
   // Live progress. Every screen was static, so a job that was actively working
   // looked identical to one that had stalled. Polling a small JSON snapshot is
   // enough here — this is one user on one machine, not a fleet.
-  (function () {
-    var running = document.body.dataset.hasRunning === "true";
-    var jobId = document.body.dataset.jobId || "";
-    if (!running) return;
+  //
+  // Three rules, each of which exists because the first version broke something:
+  //
+  //   1. Reload only when the server's fingerprint changes. The first version
+  //      reloaded every five seconds unconditionally, so a page nobody was
+  //      watching and a page mid-edit were treated identically.
+  //   2. Never reload a page the user has typed into. `has_running` is global —
+  //      any job anywhere makes every screen poll — so building a collection
+  //      while a job ran had the form wiped under the user every five seconds.
+  //   3. Never reload a screen that declares itself unsafe. The frame viewer
+  //      holds its position in the URL and a reload throws away where you were.
+  //
+  // When a reload is suppressed the change is still recorded, so the title badge
+  // can say so without moving anything.
+  window.progressWatch = (function () {
+    var body = document.body;
+    var jobId = body.dataset.jobId || "";
+    var policy = body.dataset.reload || "auto";
+    var known = body.dataset.fingerprint || "";
 
-    var timer = setInterval(function () {
-      fetch("/api/progress" + (jobId ? "?job_id=" + encodeURIComponent(jobId) : ""))
+    var listeners = [];
+    var dirty = false;
+
+    // Capture phase: a change inside a form anywhere on the page counts, and
+    // capture sees it even if something calls stopPropagation.
+    document.addEventListener("input", markDirty, true);
+    document.addEventListener("change", markDirty, true);
+
+    function markDirty(event) {
+      if (event.target && event.target.closest && event.target.closest("form")) {
+        dirty = true;
+      }
+    }
+
+    function poll() {
+      return fetch("/api/progress" + (jobId ? "?job_id=" + encodeURIComponent(jobId) : ""))
         .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (data) {
-          if (!data) return;
-          var stillRunning = data.jobs.some(function (j) { return j.running; });
-          // Reload rather than patch the DOM: the server already renders every
-          // state correctly, and a second rendering path would be a second place
-          // for the two to disagree.
-          if (!stillRunning) { clearInterval(timer); }
-          window.location.reload();
+          if (!data || !data.fingerprint) return;
+          if (data.fingerprint === known) return;
+          known = data.fingerprint;
+
+          var canReload = policy === "auto" && !dirty;
+          listeners.forEach(function (fn) { fn(data, canReload); });
+
+          if (canReload) {
+            // Reload rather than patch the DOM: the server already renders every
+            // state correctly, and a second rendering path would be a second
+            // place for the two to disagree.
+            window.location.reload();
+          }
         })
         .catch(function () { /* a failed poll is not worth interrupting anyone for */ });
-    }, 5000);
+    }
+
+    if (body.dataset.hasRunning === "true") {
+      setInterval(poll, 5000);
+    }
+
+    return {
+      onChange: function (fn) { listeners.push(fn); },
+      isDirty: function () { return dirty; }
+    };
   })();
 
   // "Show in Finder" — legitimate because this server runs on the user's own

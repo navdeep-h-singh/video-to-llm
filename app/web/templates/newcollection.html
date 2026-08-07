@@ -1,6 +1,13 @@
 {% extends "base.html" %}
 {% from "_macros.html" import empty %}
 {% block title %}New collection — Video to LLM{% endblock %}
+{#
+  Defaults rather than hard dependencies: Jinja reloads templates from disk per
+  request while route code lives in process memory, so a new template can be
+  served against an older route's context.
+#}
+{% set candidates = candidates | default([], true) %}
+{% set problems = problems | default([], true) %}
 {% block content %}
 <div class="page-head">
   <div>
@@ -9,14 +16,23 @@
   </div>
 </div>
 
-<ol class="panel" style="display:flex;gap:var(--space-4);list-style:none;margin:0;padding:var(--space-3)">
-  {% for label in ["Choose videos", "Set the order", "Choose versions", "Choose the shape", "Check and build"] %}
-  <li style="display:flex;align-items:center;gap:var(--space-2);font-size:13px">
-    <span class="mono text-muted">{{ loop.index }}</span>
-    <span>{{ label }}</span>
-  </li>
+{#
+  These five used to be a decorative header above a single flat form, two of
+  whose steps had no interface at all. They are links to the real sections now.
+  A label that names a step the page does not have is the same failure as
+  placeholder data: it describes something that is not there.
+#}
+<nav class="steps" aria-label="The steps on this page">
+  {% for anchor, label in [
+      ("step-name", "Name it"), ("step-videos", "Choose videos"),
+      ("step-order", "Set the order"), ("step-shape", "Choose the shape"),
+      ("step-build", "Check and build")] %}
+    <a class="step" href="#{{ anchor }}">
+      <span class="mono text-muted">{{ loop.index }}</span>
+      <span>{{ label }}</span>
+    </a>
   {% endfor %}
-</ol>
+</nav>
 
 {% if problems %}
 <div class="panel" style="border-left:3px solid var(--color-accent)" role="alert">
@@ -26,27 +42,61 @@
 </div>
 {% endif %}
 
-<form class="panel" method="post" action="/collections">
+{% if not candidates %}
+<div class="panel">
+  {{ empty("No processed videos yet.", "Run a job first, or bring in earlier work.") }}
+</div>
+{% else %}
+
+<form class="panel" method="post" action="/collections" id="collection-form">
+  {# The user's explicit order. Never inferred from filename, date, or content. #}
+  <input type="hidden" name="order" id="order-field" value="">
+
+  <h4 id="step-name" style="margin-top:0">1 &middot; Name it</h4>
   <div class="field">
     <label for="collection-name">What is this collection called?</label>
-    <input class="input" id="collection-name" name="name" required placeholder="Model handoff — week 6">
+    <input class="input" id="collection-name" name="name" required
+           placeholder="Model handoff — week 6">
   </div>
 
-  <h4 style="margin-top:var(--space-6)">Which videos?</h4>
-  {% if sources %}
+  <h4 id="step-videos" style="margin-top:var(--space-6)">2 &middot; Choose the videos</h4>
   <table class="table">
     <caption class="visually-hidden">Videos available to include</caption>
     <thead><tr><th scope="col"><span class="visually-hidden">Include</span></th>
                <th scope="col">Video</th><th scope="col">Length</th>
                <th scope="col">Version</th><th scope="col">Worth knowing</th></tr></thead>
     <tbody>
-      {% for source in sources %}
+      {% for candidate in candidates %}
+      {% set source = candidate.source %}
       <tr>
         <td><input type="checkbox" name="video" value="{{ source.job_video_id }}"
+                   data-name="{{ source.display_name }}"
                    aria-label="Include {{ source.display_name }}"></td>
         <td>{{ source.display_name }}</td>
         <td class="mono">{{ status.format_duration(source.duration_seconds) }}</td>
-        <td class="mono">v{{ source.source_version }}</td>
+        <td>
+          {#
+            The value carries both ids: the checkbox names the video, this names
+            which processed version of it to pin. One fixed field name for every
+            row, rather than a field name generated per video.
+          #}
+          {% if candidate.versions | length > 1 %}
+            <label class="visually-hidden" for="version-{{ source.job_video_id }}">
+              Which version of {{ source.display_name }}
+            </label>
+            <select class="input mono" id="version-{{ source.job_video_id }}" name="version"
+                    style="padding:4px 8px;font-size:13px">
+              {% for option in candidate.versions %}
+                <option value="{{ source.job_video_id }}:{{ option.job_video_id }}"
+                        {% if option.is_active %}selected{% endif %}>{{ option.label }}</option>
+              {% endfor %}
+            </select>
+          {% else %}
+            <span class="mono">v{{ source.source_version }}</span>
+            <input type="hidden" name="version"
+                   value="{{ source.job_video_id }}:{{ source.job_video_id }}">
+          {% endif %}
+        </td>
         <td>
           {% if source.has_warning %}
             <span class="tag tag-accent">{{ source.warning_label }}</span>
@@ -60,14 +110,26 @@
   </table>
   <p class="text-muted" style="font-size:12px;margin-top:var(--space-2)">
     Anything marked can still be included — you are just told what is imperfect
-    about it first.
+    about it first. A collection pins the version you choose here: processing a
+    video again later makes a new version and leaves this collection alone.
   </p>
-  {% else %}
-    {{ empty("No processed videos yet.", "Run a job first, or bring in earlier work.") }}
-  {% endif %}
 
-  <fieldset style="border:0;padding:0;margin:var(--space-6) 0 0">
-    <legend><h4>What shape should the result be?</h4></legend>
+  <h4 id="step-order" style="margin-top:var(--space-6)">3 &middot; Set the order</h4>
+  <p class="text-muted" style="font-size:13px;margin:0 0 var(--space-2)">
+    They are read in this order. Drag them, or use the buttons — the order is
+    yours and is never guessed from the filenames or the dates.
+  </p>
+  <ol class="order-list" id="order-list"></ol>
+  <p class="text-muted" style="font-size:13px" id="order-empty">
+    Nothing chosen yet. Tick a video above and it appears here.
+  </p>
+  {# Announced rather than only shown: a move made with the keyboard has to be
+     confirmable without seeing the list redraw. #}
+  <p class="visually-hidden" role="status" aria-live="polite" id="order-announce"></p>
+
+  <h4 id="step-shape" style="margin-top:var(--space-6)">4 &middot; Choose the shape</h4>
+  <fieldset style="border:0;padding:0;margin:0">
+    <legend class="visually-hidden">What shape should the result be?</legend>
     <div class="grid grid-2" style="margin-top:var(--space-2)">
       <label class="pick" style="cursor:pointer">
         <input type="radio" name="mode" value="full" checked
@@ -106,7 +168,8 @@
   </div>
 
   <label class="radio" style="margin-top:var(--space-3)">
-    <input type="checkbox" name="allow_video_split">
+    <input type="checkbox" name="allow_video_split"
+           {% if settings.collections.allow_video_split %}checked{% endif %}>
     <span class="dot" aria-hidden="true"></span>
     <span>Allow a very long video to be cut across parts</span>
   </label>
@@ -115,7 +178,12 @@
     part repeats a little of the one before so the thread is not lost.
   </p>
 
-  <div style="margin-top:var(--space-6);display:flex;gap:var(--space-2)">
+  <h4 id="step-build" style="margin-top:var(--space-6)">5 &middot; Check and build</h4>
+  <div class="estimate" id="estimate" aria-live="polite">
+    <p class="text-muted" style="margin:0;font-size:13px">Choose a video to see what you get.</p>
+  </div>
+
+  <div style="margin-top:var(--space-4);display:flex;gap:var(--space-2)">
     <button class="btn btn-primary" type="submit">Build collection</button>
     <a class="btn btn-secondary" href="/collections">Cancel</a>
   </div>
@@ -124,4 +192,220 @@
     processed again and nothing is sent anywhere.
   </p>
 </form>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Ordering and the pre-build estimate.
+  //
+  // Two rules shape this:
+  //
+  //   1. Keyboard parity is not a retrofit. The buttons are the mechanism and
+  //      drag is layered on top of them, so there is no path the mouse can take
+  //      that the keyboard cannot. Building it the other way round leaves the
+  //      keyboard support as a second implementation to keep in step.
+  //   2. The estimate is computed on the server by the same code that does the
+  //      build. Working it out here would be quicker and would be a second
+  //      implementation of the packing rule — and the day the two disagreed,
+  //      this page would be promising something the build then contradicted.
+  (function () {
+    var form = document.getElementById("collection-form");
+    if (!form) return;
+
+    var list = document.getElementById("order-list");
+    var listEmpty = document.getElementById("order-empty");
+    var announce = document.getElementById("order-announce");
+    var orderField = document.getElementById("order-field");
+    var estimate = document.getElementById("estimate");
+
+    var order = [];
+    var names = {};
+    var dragging = null;
+
+    form.querySelectorAll('input[name="video"]').forEach(function (box) {
+      names[box.value] = box.dataset.name || box.value;
+      box.addEventListener("change", function () {
+        if (box.checked) {
+          if (order.indexOf(box.value) === -1) order.push(box.value);
+        } else {
+          order = order.filter(function (id) { return id !== box.value; });
+        }
+        render();
+        refreshEstimate();
+      });
+    });
+
+    function move(from, to) {
+      if (to < 0 || to >= order.length) return;
+      var moved = order.splice(from, 1)[0];
+      order.splice(to, 0, moved);
+      announce.textContent = names[moved] + " is now " + (to + 1) + " of " + order.length;
+      render(moved);
+      refreshEstimate();
+    }
+
+    function button(label, description, onClick, disabled) {
+      var element = document.createElement("button");
+      element.type = "button";
+      element.className = "btn btn-ghost";
+      element.textContent = label;
+      element.setAttribute("aria-label", description);
+      element.disabled = !!disabled;
+      element.addEventListener("click", onClick);
+      return element;
+    }
+
+    // `focusId` restores focus after the list is rebuilt. Without it a keyboard
+    // user pressing "move up" is dropped back to the top of the document on
+    // every press, which makes reordering by keyboard technically possible and
+    // practically unusable.
+    function render(focusId) {
+      orderField.value = order.join(",");
+      listEmpty.style.display = order.length ? "none" : "";
+      list.innerHTML = "";
+
+      order.forEach(function (id, index) {
+        var name = names[id];
+        var item = document.createElement("li");
+        item.className = "order-item";
+        item.draggable = true;
+        item.dataset.id = id;
+
+        var position = document.createElement("span");
+        position.className = "num mono";
+        position.textContent = index + 1;
+
+        var label = document.createElement("span");
+        label.className = "grow";
+        label.textContent = name;
+
+        item.appendChild(position);
+        item.appendChild(label);
+
+        item.appendChild(button("↑", "Move " + name + " up", function () {
+          move(index, index - 1);
+        }, index === 0));
+        item.appendChild(button("↓", "Move " + name + " down", function () {
+          move(index, index + 1);
+        }, index === order.length - 1));
+        item.appendChild(button("⤒", "Move " + name + " to the top", function () {
+          move(index, 0);
+        }, index === 0));
+        item.appendChild(button("✕", "Take " + name + " out of this collection", function () {
+          var box = form.querySelector('input[name="video"][value="' + id + '"]');
+          if (box) { box.checked = false; }
+          order = order.filter(function (other) { return other !== id; });
+          announce.textContent = name + " was taken out";
+          render();
+          refreshEstimate();
+        }));
+
+        item.addEventListener("dragstart", function () { dragging = id; item.classList.add("is-dragging"); });
+        item.addEventListener("dragend", function () { dragging = null; item.classList.remove("is-dragging"); });
+        item.addEventListener("dragover", function (event) { event.preventDefault(); });
+        item.addEventListener("drop", function (event) {
+          event.preventDefault();
+          if (!dragging || dragging === id) return;
+          move(order.indexOf(dragging), index);
+        });
+
+        list.appendChild(item);
+      });
+
+      if (focusId) {
+        var moved = list.querySelector('[data-id="' + focusId + '"]');
+        var target = moved && moved.querySelector("button:not([disabled])");
+        if (target) target.focus();
+      }
+    }
+
+    var pending = null;
+
+    function refreshEstimate() {
+      if (pending) clearTimeout(pending);
+      // Debounced: each estimate reads every chosen video's assembled document,
+      // and typing in the token field would otherwise start one read per
+      // keystroke.
+      pending = setTimeout(runEstimate, 400);
+    }
+
+    function runEstimate() {
+      if (!order.length) {
+        estimate.innerHTML = '<p class="text-muted" style="margin:0;font-size:13px">Choose a video to see what you get.</p>';
+        return;
+      }
+
+      estimate.textContent = "Working it out…";
+
+      fetch("/api/collections/estimate", { method: "POST", body: new FormData(form) })
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (data) {
+          if (!data) { estimate.textContent = "The estimate could not be worked out."; return; }
+          if (!data.ready) { estimate.textContent = data.detail || "Nothing to estimate yet."; return; }
+          estimate.innerHTML = "";
+
+          var facts = document.createElement("div");
+          facts.className = "estimate-facts";
+          [["Videos", data.video_count],
+           ["Total length", data.duration],
+           ["Size", data.token_label],
+           [data.pack_count === null ? "Result" : "Parts",
+            data.pack_count === null ? "one document" : data.pack_count]
+          ].forEach(function (pair) {
+            var cell = document.createElement("div");
+            var term = document.createElement("span");
+            term.className = "text-muted";
+            term.textContent = pair[0];
+            var value = document.createElement("strong");
+            value.className = "mono";
+            value.textContent = pair[1];
+            cell.appendChild(term);
+            cell.appendChild(value);
+            facts.appendChild(cell);
+          });
+          estimate.appendChild(facts);
+
+          var note = document.createElement("p");
+          note.className = "text-muted";
+          note.style.cssText = "font-size:12px;margin:var(--space-2) 0 0";
+          note.textContent = "Sizes are estimates — the exact count depends on the model you use. Goes to " + data.destination;
+          estimate.appendChild(note);
+
+          if (data.problem) {
+            var problem = document.createElement("p");
+            problem.className = "note";
+            problem.style.marginTop = "var(--space-2)";
+            problem.textContent = data.problem;
+            estimate.appendChild(problem);
+          }
+
+          if (data.warnings && data.warnings.length) {
+            var heading = document.createElement("p");
+            heading.style.cssText = "font-size:13px;margin:var(--space-3) 0 var(--space-1)";
+            heading.textContent = "Worth knowing before you build";
+            estimate.appendChild(heading);
+
+            var warnings = document.createElement("ul");
+            warnings.style.cssText = "margin:0;padding-left:var(--space-4);font-size:13px";
+            data.warnings.forEach(function (text) {
+              var entry = document.createElement("li");
+              entry.textContent = text;
+              warnings.appendChild(entry);
+            });
+            estimate.appendChild(warnings);
+          }
+        })
+        .catch(function () { estimate.textContent = "The estimate could not be worked out."; });
+    }
+
+    form.querySelectorAll('input[name="mode"], #token-limit, #reserve, ' +
+                          'input[name="allow_video_split"], select[name="version"]')
+      .forEach(function (control) {
+        control.addEventListener("change", refreshEstimate);
+      });
+
+    render();
+  })();
+</script>
 {% endblock %}

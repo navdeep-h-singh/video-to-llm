@@ -1,6 +1,11 @@
 {% extends "base.html" %}
 {% from "_macros.html" import empty %}
 {% block title %}Review — Video to LLM{% endblock %}
+{# Which picture you are looking at lives in the URL, so an automatic reload
+   throws away where you were. Reviewing thousands of frames is the work this
+   screen exists for; having it jump back under you mid-review makes it
+   unusable while any job is running. #}
+{% block reload_policy %}manual{% endblock %}
 {% block content %}
 <div class="page-head">
   <div>

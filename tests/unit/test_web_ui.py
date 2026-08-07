@@ -418,6 +418,77 @@ def test_progress_can_be_scoped_to_one_job(client, db):
     assert payload["jobs"][0]["id"] == "j2"
 
 
+def test_the_fingerprint_holds_still_when_nothing_changes(client, db):
+    """The reload is driven off this value, so a fingerprint that churned on its
+    own would put every screen back on the five-second reload it replaced."""
+    seed_job(db)
+
+    first = client.get("/api/progress").json()["fingerprint"]
+    second = client.get("/api/progress").json()["fingerprint"]
+    assert first == second
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        pytest.param(
+            lambda c: c.execute(
+                "UPDATE jobs SET status = 'analyzing', updated_at = ? WHERE id = 'j1'",
+                (utc_now(),),
+            ),
+            id="a job changes state",
+        ),
+        pytest.param(
+            lambda c: c.execute("DELETE FROM jobs WHERE id = 'j1'"),
+            id="a job is removed",
+        ),
+        pytest.param(
+            lambda c: c.execute(
+                "INSERT INTO stage_runs (id, job_video_id, stage, status, items_total,"
+                " items_done, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+                ("s9", "j1v1", "frames", "running", 100, 7, utc_now(), utc_now()),
+            ),
+            id="frame-by-frame progress moves",
+        ),
+    ],
+)
+def test_the_fingerprint_moves_when_a_screen_would_look_different(client, db, change):
+    """Each of these is something a polling screen displays. If the fingerprint
+    missed one, the screen would sit there showing a stale number indefinitely —
+    which is worse than the over-eager reload, because it looks correct."""
+    seed_job(db)
+    before = client.get("/api/progress").json()["fingerprint"]
+
+    change(db)
+    db.commit()
+
+    assert client.get("/api/progress").json()["fingerprint"] != before
+
+
+def test_the_rendered_page_carries_the_same_fingerprint_the_endpoint_reports(client, db):
+    """The first poll compares against the value baked into the page. If the two
+    were computed differently, every page would reload once immediately."""
+    seed_job(db)
+
+    page = client.get("/").text
+    endpoint = client.get("/api/progress").json()["fingerprint"]
+    assert f'data-fingerprint="{endpoint}"' in page
+
+
+def test_the_review_screen_refuses_to_reload_itself(client, db):
+    """Which picture you are on lives in the URL. `has_running` is global, so
+    any job anywhere used to throw the viewer back to the top every five
+    seconds while the user was working through frames."""
+    seed_job(db)
+
+    assert 'data-reload="manual"' in client.get("/jobs/j1/review").text
+
+
+def test_ordinary_screens_still_reload_themselves(client, db):
+    seed_job(db)
+    assert 'data-reload="auto"' in client.get("/").text
+
+
 # ── File serving ──────────────────────────────────────────────────────────
 
 
@@ -490,3 +561,193 @@ def test_the_cache_key_changes_when_the_stylesheet_does(client, monkeypatch):
     monkeypatch.setattr(Path, "stat", newer)
     second = re.search(r"tokens\.css\?v=(\d+)", client.get("/").text).group(1)
     assert second != first
+
+
+# ── Collections: order, versions, and the estimate ────────────────────────
+
+
+def seed_processed_video(
+    connection, root, video_id, *, name, sequence, body="text\n", version=1, active=True
+):
+    """A video with real output on disk, so it is a usable collection source."""
+    directory = Path(root) / "j1" / video_id
+    (directory / "frames").mkdir(parents=True, exist_ok=True)
+    (directory / "assembled.txt").write_text(body, "utf-8")
+    (directory / "frames" / "000000_t000000.jpg").write_bytes(b"\xff\xd8")
+
+    connection.execute(
+        "INSERT INTO job_videos (id, job_id, source_path, display_name, sequence,"
+        " version, is_active_version, status, duration_seconds, output_dir,"
+        " created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        (
+            video_id,
+            "j1",
+            f"/src/{name}",
+            name,
+            sequence,
+            version,
+            int(active),
+            "completed",
+            600.0,
+            f"j1/{video_id}",
+            utc_now(),
+            utc_now(),
+        ),
+    )
+    return directory
+
+
+@pytest.fixture
+def sources(db, settings):
+    connection = db
+    connection.execute(
+        "INSERT INTO jobs (id, name, status, output_root, created_at, updated_at)"
+        " VALUES (?,?,?,?,?,?)",
+        ("j1", "Source job", "completed", "/out", utc_now(), utc_now()),
+    )
+    seed_processed_video(connection, settings.output_root, "a", name="first.mp4", sequence=0)
+    seed_processed_video(connection, settings.output_root, "b", name="second.mp4", sequence=1)
+    seed_processed_video(connection, settings.output_root, "c", name="third.mp4", sequence=2)
+    connection.commit()
+    return connection
+
+
+def test_the_advertised_steps_are_real_sections(client, sources):
+    """The header used to name five steps above a flat form, two of which had no
+    interface at all. A label for a step that is not there is placeholder data
+    wearing a different hat."""
+    page = client.get("/collections/new").text
+
+    for anchor in ["step-name", "step-videos", "step-order", "step-shape", "step-build"]:
+        assert f'id="{anchor}"' in page, f"{anchor} is advertised but not on the page"
+    assert 'id="order-list"' in page
+    assert 'id="estimate"' in page
+
+
+def test_the_order_the_user_set_is_the_order_that_is_stored(client, sources):
+    """The order field, not the order the checkboxes happened to be submitted in.
+    Order is the thing the specification is most emphatic about."""
+    client.post(
+        "/collections",
+        data={
+            "name": "Week 6",
+            "video": ["a", "b", "c"],
+            "order": "c,a,b",
+            "mode": "full",
+            "token_limit": 200000,
+            "reserve_tokens": 20000,
+        },
+    )
+
+    stored = sources.execute(
+        "SELECT display_name FROM collection_sources ORDER BY sequence"
+    ).fetchall()
+    assert [row["display_name"] for row in stored] == ["third.mp4", "first.mp4", "second.mp4"]
+
+
+def test_a_chosen_video_missing_from_the_order_is_still_included(client, sources):
+    """Dropping it silently would lose work the user asked for; refusing would
+    strand the whole build over a field they never see."""
+    client.post(
+        "/collections",
+        data={"name": "Week 6", "video": ["a", "b"], "order": "b", "mode": "full"},
+    )
+
+    stored = sources.execute(
+        "SELECT display_name FROM collection_sources ORDER BY sequence"
+    ).fetchall()
+    assert [row["display_name"] for row in stored] == ["second.mp4", "first.mp4"]
+
+
+def test_an_order_naming_a_video_that_was_not_chosen_ignores_it(client, sources):
+    """Unticking a video leaves it in the order field until the next render."""
+    client.post(
+        "/collections",
+        data={"name": "Week 6", "video": ["a"], "order": "a,b,c", "mode": "full"},
+    )
+
+    stored = sources.execute("SELECT COUNT(*) FROM collection_sources").fetchone()[0]
+    assert stored == 1
+
+
+def test_the_chosen_version_is_what_gets_pinned(client, sources, settings):
+    """Selecting an older version has to reference that version's row. Pinning
+    the newest one regardless would make the control decorative."""
+    seed_processed_video(
+        sources, settings.output_root, "a2", name="first.mp4", sequence=0, version=2, active=False
+    )
+    sources.commit()
+
+    client.post(
+        "/collections",
+        data={"name": "Week 6", "video": ["a"], "order": "a", "version": ["a:a2"], "mode": "full"},
+    )
+
+    pinned = sources.execute(
+        "SELECT job_video_id, source_version FROM collection_sources"
+    ).fetchone()
+    assert pinned["job_video_id"] == "a2"
+    assert pinned["source_version"] == 2
+
+
+def test_the_estimate_reports_what_the_build_would_produce(client, sources):
+    response = client.post(
+        "/api/collections/estimate",
+        data={
+            "video": ["a", "b"],
+            "order": "a,b",
+            "mode": "full",
+            "token_limit": 200000,
+            "reserve_tokens": 20000,
+        },
+    )
+
+    payload = response.json()
+    assert payload["ready"] is True
+    assert payload["video_count"] == 2
+    assert payload["tokens"] > 0
+    assert payload["pack_count"] is None
+
+
+def test_the_estimate_counts_parts_in_pack_mode(client, sources, settings):
+    seed_processed_video(
+        sources, settings.output_root, "big", name="long.mp4", sequence=3, body="x" * 60000
+    )
+    sources.commit()
+
+    payload = client.post(
+        "/api/collections/estimate",
+        data={
+            "video": ["big"],
+            "order": "big",
+            "mode": "packs",
+            "token_limit": 6000,
+            "reserve_tokens": 1000,
+            "allow_video_split": "on",
+        },
+    ).json()
+
+    assert payload["pack_count"] > 1
+
+
+def test_the_estimate_is_always_labelled_as_an_estimate(client, sources):
+    payload = client.post(
+        "/api/collections/estimate",
+        data={"video": ["a"], "order": "a", "mode": "full"},
+    ).json()
+    assert "about" in payload["token_label"]
+
+
+def test_the_estimate_says_so_when_nothing_is_chosen(client, sources):
+    payload = client.post("/api/collections/estimate", data={"mode": "full"}).json()
+    assert payload["ready"] is False
+    assert payload["detail"]
+
+
+def test_estimating_writes_no_collection(client, sources):
+    """It runs on every change to the form. One abandoned build per keystroke
+    would be a remarkable way to fill a disk."""
+    client.post("/api/collections/estimate", data={"video": ["a"], "order": "a", "mode": "full"})
+
+    assert sources.execute("SELECT COUNT(*) FROM collections").fetchone()[0] == 0
+    assert sources.execute("SELECT COUNT(*) FROM collection_builds").fetchone()[0] == 0

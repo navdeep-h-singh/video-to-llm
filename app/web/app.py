@@ -133,6 +133,43 @@ def create_app(settings: Settings) -> FastAPI:
             return "Space unknown"
         return f"{free / 1024**3:.0f} GB free"
 
+    def progress_fingerprint(connection: sqlite3.Connection | None) -> str:
+        """A cheap value that changes exactly when a polling screen would differ.
+
+        The screens used to reload on a fixed five-second timer regardless of
+        whether anything had changed, which wiped whatever the user was in the
+        middle of typing and threw the frame viewer back to the top. Comparing a
+        fingerprint means a reload happens because something moved, not because
+        five seconds passed.
+
+        The job states go in individually rather than as ``MAX(updated_at)``.
+        Timestamps are stored to the second, so two transitions inside one second
+        — ``ready`` to ``preparing`` to ``transcribing`` is quick — leave the
+        maximum unchanged, and the screen would then sit on a stale status
+        indefinitely. That is worse than the reload it replaced, because a stale
+        screen looks correct.
+
+        The ``stage_runs`` sums stay aggregated: they move on every frame, so
+        they never need help to change, and that table is the larger of the two.
+        """
+        if connection is None:
+            return "none"
+
+        from hashlib import sha256
+
+        digest = sha256(worker_state(connection).key.encode("utf-8"))
+
+        for row in connection.execute("SELECT id, status, updated_at FROM jobs ORDER BY id"):
+            digest.update(f"|{row['id']}:{row['status']}:{row['updated_at']}".encode())
+
+        stages = connection.execute(
+            "SELECT COUNT(*) AS n, COALESCE(SUM(items_done), 0) AS done,"
+            " COALESCE(SUM(items_total), 0) AS total FROM stage_runs"
+        ).fetchone()
+        digest.update(f"|{stages['n']}:{stages['done']}:{stages['total']}".encode())
+
+        return digest.hexdigest()[:16]
+
     def counts(connection: sqlite3.Connection | None) -> dict[str, str]:
         if connection is None:
             return {"jobs": "", "collections": "", "imports": ""}
@@ -207,6 +244,9 @@ def create_app(settings: Settings) -> FastAPI:
                 # should be genuinely idle.
                 "has_running": running is not None,
                 "live_job_id": running["id"] if running else "",
+                # Embedded so the first poll compares against what this render
+                # actually showed, rather than against the poll before it.
+                "progress_fingerprint": progress_fingerprint(connection),
                 "asset_version": asset_version(),
             }
             base.update(context)
@@ -433,20 +473,33 @@ def create_app(settings: Settings) -> FastAPI:
                 connection.close()
         return page(request, "collections.html", "collections", collections=found)
 
+    def collection_candidates(
+        connection: sqlite3.Connection | None, root: Path | None
+    ) -> list[dict[str, Any]]:
+        """Every video that could go in a collection, with its other versions.
+
+        The version list is usually one entry. It stops being one the moment a
+        video is processed again, and a collection that could only ever pin the
+        newest output would make versioning unusable from the interface.
+        """
+        from app.collections.model import available_sources, versions_of
+
+        if connection is None or root is None:
+            return []
+        return [
+            {"source": source, "versions": versions_of(connection, source.job_video_id)}
+            for source in available_sources(connection, root)
+        ]
+
     @app.get("/collections/new", response_class=HTMLResponse)
     def new_collection(request: Request) -> HTMLResponse:
-        from app.collections.model import available_sources
-
         connection = connect()
-        sources: list[Any] = []
-        root = current().output_root
         try:
-            if connection is not None and root is not None:
-                sources = available_sources(connection, root)
+            candidates = collection_candidates(connection, current().output_root)
         finally:
             if connection is not None:
                 connection.close()
-        return page(request, "newcollection.html", "newcollection", sources=sources)
+        return page(request, "newcollection.html", "newcollection", candidates=candidates)
 
     @app.get("/collections/{collection_id}", response_class=HTMLResponse)
     def collection_detail(request: Request, collection_id: str) -> HTMLResponse:
@@ -763,6 +816,115 @@ def create_app(settings: Settings) -> FastAPI:
                 connection.close()
         return RedirectResponse(f"/jobs/{job_id}", status_code=303)
 
+    def ordered_selection(order: str, video: list[str], version: list[str]) -> list[str]:
+        """Turn the form's choices into job_video_ids, in the user's own order.
+
+        Order comes from the explicit ``order`` field, never from the filename,
+        the date, or anything about the content. Two recordings from the same
+        morning have no inherent order, and guessing wrong silently reverses the
+        narrative — so when the field is absent the fallback is the order the
+        rows were submitted in, which is the order they were on screen, still not
+        a guess about the videos themselves.
+
+        Versions arrive as ``identity:version_row`` pairs so that a select can
+        name a different row than the checkbox without the two field names
+        having to be generated per video.
+        """
+        picked = [v for v in video if v]
+
+        pinned: dict[str, str] = {}
+        for pair in version:
+            identity, _, target = pair.partition(":")
+            if identity and target:
+                pinned[identity] = target
+
+        sequence = [item for item in (part.strip() for part in order.split(",")) if item in picked]
+        sequence += [item for item in picked if item not in sequence]
+
+        return [pinned.get(item, item) for item in sequence]
+
+    def transient_collection(
+        connection: sqlite3.Connection,
+        root: Path,
+        chosen: list[str],
+        **fields: Any,
+    ) -> Any:
+        """A Collection assembled in memory, for previewing a build.
+
+        ``sequence`` is overwritten with the position in the collection.
+        :func:`assess_source` fills it from the video's own row, where it means
+        the video's place *within its job* — and :func:`load_sources` sorts by
+        it. Left alone, a preview would silently reorder the very thing the user
+        just arranged by hand.
+        """
+        from app.collections.model import Collection, assess_source
+
+        sources = []
+        for position, video_id in enumerate(chosen):
+            source = assess_source(connection, video_id, root)
+            if source is None:
+                continue
+            source.sequence = position
+            sources.append(source)
+
+        return Collection(id="", sources=sources, **fields)
+
+    @app.post("/api/collections/estimate")
+    def estimate_collection(
+        mode: str = Form("full"),
+        token_limit: int = Form(200000),
+        reserve_tokens: int = Form(20000),
+        allow_video_split: str = Form(""),
+        order: str = Form(""),
+        video: list[str] = Form(default=[]),
+        version: list[str] = Form(default=[]),
+    ) -> JSONResponse:
+        """What this collection would produce, computed before it is built.
+
+        Runs the real loading and packing code rather than approximating it, so
+        the figure on the form and the figure in the finished collection cannot
+        disagree.
+        """
+        from app.collections.build import preview_build
+
+        connection = connect()
+        root = current().output_root
+        if connection is None or root is None:
+            return JSONResponse({"ready": False, "detail": "No output folder is set yet."})
+
+        try:
+            chosen = ordered_selection(order, video, version)
+            if not chosen:
+                return JSONResponse({"ready": False, "detail": "No videos chosen yet."})
+
+            collection = transient_collection(
+                connection,
+                root,
+                chosen,
+                name="",
+                mode=mode,
+                token_limit=token_limit,
+                reserve_tokens=reserve_tokens,
+                allow_video_split=bool(allow_video_split),
+            )
+            preview = preview_build(collection, output_root=root)
+
+            return JSONResponse(
+                {
+                    "ready": True,
+                    "video_count": preview.video_count,
+                    "duration": preview.duration_label,
+                    "tokens": preview.total_tokens,
+                    "token_label": preview.token_label,
+                    "pack_count": preview.pack_count,
+                    "warnings": preview.warnings,
+                    "problem": preview.problem,
+                    "destination": str(Path(root) / "collections"),
+                }
+            )
+        finally:
+            connection.close()
+
     @app.post("/collections")
     def create_collection_route(
         request: Request,
@@ -772,7 +934,9 @@ def create_app(settings: Settings) -> FastAPI:
         reserve_tokens: int = Form(20000),
         target_model_label: str = Form(""),
         allow_video_split: str = Form(""),
+        order: str = Form(""),
         video: list[str] = Form(default=[]),
+        version: list[str] = Form(default=[]),
     ) -> Response:
         from app.collections.build import build_collection
         from app.collections.model import (
@@ -788,15 +952,13 @@ def create_app(settings: Settings) -> FastAPI:
             return RedirectResponse("/launch", status_code=303)
 
         try:
-            chosen = [v for v in video if v]
+            chosen = ordered_selection(order, video, version)
             if not name.strip() or not chosen:
-                from app.collections.model import available_sources
-
                 return page(
                     request,
                     "newcollection.html",
                     "newcollection",
-                    sources=available_sources(connection, root),
+                    candidates=collection_candidates(connection, root),
                     problems=["Give the collection a name and choose at least one video."],
                 )
 
@@ -1052,7 +1214,7 @@ def create_app(settings: Settings) -> FastAPI:
         """A small snapshot the screens poll so a running job is visibly running."""
         connection = connect()
         if connection is None:
-            return JSONResponse({"worker": "unknown", "jobs": []})
+            return JSONResponse({"worker": "unknown", "jobs": [], "fingerprint": "none"})
 
         try:
             worker = worker_state(connection)
@@ -1102,6 +1264,7 @@ def create_app(settings: Settings) -> FastAPI:
                     "worker": worker.key,
                     "worker_label": worker.label,
                     "jobs": jobs,
+                    "fingerprint": progress_fingerprint(connection),
                 }
             )
         finally:
