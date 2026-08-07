@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Something went wrong — Video to LLM{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Something went wrong on this screen</h1>
+    <p class="page-sub">Your jobs and files are unaffected — this is only the display.</p>
+  </div>
+</div>
+
+<div class="panel" role="alert">
+  <p style="font-size:14px">
+    The details were written to the log. Nothing was lost: the background worker
+    keeps its own state, and everything already produced is still on disk.
+  </p>
+
+  <h5 style="margin-top:var(--space-4)">Most likely cause</h5>
+  <p style="font-size:14px;margin:0">
+    If the application was updated while this server was running, the two are out
+    of step — screens are read from disk but the program itself is not. Stop it
+    and start it again:
+  </p>
+  <pre class="note note-neutral" style="margin-top:var(--space-2);white-space:pre-wrap;overflow-x:auto">video-to-llm start</pre>
+
+  <div style="margin-top:var(--space-4);display:flex;gap:var(--space-2)">
+    <a class="btn btn-secondary" href="/">Back to the dashboard</a>
+    <a class="btn btn-secondary" href="/launch">Check this computer</a>
+  </div>
+</div>
+{% endblock %}

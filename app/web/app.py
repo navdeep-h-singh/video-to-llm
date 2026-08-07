@@ -164,7 +164,9 @@ def create_app(settings: Settings) -> FastAPI:
             ),
         ]
 
-    def page(request: Request, template: str, screen: str, **context: Any) -> HTMLResponse:
+    def page(
+        request: Request, template: str, screen: str, status_code: int = 200, **context: Any
+    ) -> HTMLResponse:
         connection = connect()
         try:
             base = {
@@ -175,7 +177,9 @@ def create_app(settings: Settings) -> FastAPI:
                 "status": status_module,
             }
             base.update(context)
-            return templates.TemplateResponse(request=request, name=template, context=base)
+            return templates.TemplateResponse(
+                request=request, name=template, context=base, status_code=status_code
+            )
         finally:
             if connection is not None:
                 connection.close()
@@ -683,6 +687,34 @@ def create_app(settings: Settings) -> FastAPI:
             draft=draft or current(),
             saved=request.query_params.get("saved") == "1",
         )
+
+    @app.exception_handler(500)
+    def internal_error(request: Request, exc: Exception) -> Response:
+        """Explain a failure rather than showing a bare "Internal Server Error".
+
+        The detail goes to the log, redacted, and never to the browser: an
+        exception message can carry a path, a query, or a credential, and this
+        page is reachable without any authentication.
+        """
+        from app.core.redaction import redacted_exception_text
+
+        logger.error(
+            "Unhandled error rendering %s: %s",
+            request.url.path,
+            redacted_exception_text(exc),
+            exc_info=True,
+        )
+        try:
+            return page(request, "error.html", "dashboard", status_code=500)
+        except Exception:
+            # The shell itself is broken; anything richer would fail too.
+            return HTMLResponse(
+                "<h1>Something went wrong on this screen</h1>"
+                "<p>Your jobs and files are unaffected. "
+                "If the application was updated while this server was running, "
+                "stop it and start it again.</p>",
+                status_code=500,
+            )
 
     return app
 

@@ -12,6 +12,7 @@ in `tests/integration/test_live_ollama.py`.
 from __future__ import annotations
 
 import pytest
+from fastapi import Request
 from fastapi.testclient import TestClient
 
 from app.core.config import Settings, load_settings, render_settings_toml, save_settings
@@ -373,3 +374,80 @@ def test_the_local_disclosures_survive_the_rewrite(client):
     assert "$0.00" not in body
     assert "tiny text" in body
     assert "Review low-confidence results" in body
+
+
+# ── Surviving an upgrade while the server is running ──────────────────────
+#
+# Jinja loads templates from disk on every request; route code lives in the
+# running process's memory. Upgrading a checkout under a running server
+# therefore renders new templates against an old context. This produced a bare
+# "Internal Server Error" on /settings, on a machine where the server had been
+# up for five hours.
+
+
+def test_the_settings_screen_renders_without_the_new_context(tmp_path):
+    """The exact stale-process case, reproduced directly.
+
+    `settings` is passed by every route in every version, so the form falls
+    back to it rather than depending on a variable an older route never sent.
+    """
+    from jinja2 import Environment, FileSystemLoader
+
+    from app.services.doctor import run_doctor
+    from app.web.app import TEMPLATE_DIR
+
+    env = Environment(loader=FileSystemLoader(str(TEMPLATE_DIR)), autoescape=True)
+    active = Settings().with_output_root(tmp_path / "out")
+
+    rendered = env.get_template("settings.html").render(
+        settings=active,
+        report=run_doctor(active),
+        credentials=[],
+        env_vars={},
+        nav_groups=[],
+        worker=None,
+        disk_label="",
+        status=None,
+        request=None,
+    )
+    assert "Describing what is on screen" in rendered
+
+
+def test_an_unhandled_error_explains_itself_instead_of_saying_nothing():
+    from app.web.app import create_app
+
+    app = create_app(Settings())
+
+    @app.get("/deliberately-broken")
+    def broken(request: Request) -> None:
+        raise RuntimeError("a synthetic failure")
+
+    with TestClient(app, raise_server_exceptions=False) as broken_client:
+        response = broken_client.get("/deliberately-broken")
+
+    assert response.status_code == 500
+    assert "Your jobs and files are unaffected" in response.text
+    assert "start it again" in response.text
+
+
+def test_the_error_page_does_not_leak_the_exception():
+    """This page is reachable without authentication.
+
+    An exception message can carry a path, a query, or a credential, so the
+    detail goes to the log and never to the browser.
+    """
+    from app.web.app import create_app
+
+    app = create_app(Settings())
+    secret = "-".join(["sk", "ant", "api03", "LEAKED", "THROUGH", "AN", "ERROR"])
+
+    @app.get("/deliberately-broken")
+    def broken(request: Request) -> None:
+        raise RuntimeError(f"failed while using {secret}")
+
+    with TestClient(app, raise_server_exceptions=False) as broken_client:
+        response = broken_client.get("/deliberately-broken")
+
+    assert secret not in response.text
+    assert "LEAKED" not in response.text
+    assert "Traceback" not in response.text

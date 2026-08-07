@@ -1,6 +1,20 @@
 {% extends "base.html" %}
 {% block title %}Settings & checks — Video to LLM{% endblock %}
 {% block content %}
+{#
+  Defaults rather than hard dependencies. Jinja loads templates from disk on
+  every request while route code lives in the running process's memory, so an
+  upgraded checkout served by a server started before the upgrade renders a new
+  template against an old context. Depending on a variable the old route never
+  passed turns that into a 500 on a screen the user is trying to reach.
+  `settings` is passed by every route, in every version, so it is the safe
+  fallback for the form's current values.
+#}
+{% set draft = draft | default(settings, true) %}
+{% set problems = problems | default([], true) %}
+{% set health = health | default(none, true) %}
+{% set saved = saved | default(false, true) %}
+
 <div class="page-head">
   <div>
     <h1>Settings &amp; checks</h1>
