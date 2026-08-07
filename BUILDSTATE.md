@@ -3,8 +3,8 @@
 > Read this file, `docs/DECISIONS.md`, `BUILDPLAN.md`, and `git status` before
 > doing any work in a new session.
 
-**Current phase:** 5 — Enrichment, assembly, archives, imports, versioned reruns
-**Overall:** 4 of 9 phases complete
+**Current phase:** 6 — Collections
+**Overall:** 5 of 9 phases complete
 
 ## Environment (verified 2026-08-06)
 
@@ -66,10 +66,18 @@
 - `app/providers/retry.py` — bounded backoff, one corrective schema retry,
   skips, fallback policy that never auto-moves local → cloud
 
+### Phase 5 — Assembly and imports ✅ (commits `d731408`, `6a54325`, `740bf62`)
+- `app/pipeline/visual.py` — Stage 3 orchestration; never re-sends a completed batch
+- `app/pipeline/enrich.py` — deterministic emphasis, switches, segments
+- `app/pipeline/assemble.py` — time-ordered `assembled.txt`, `master_assembled.txt`
+- `app/pipeline/archive.py` — `analysis_input` handoff, symlink-or-copy frames
+- `app/pipeline/finalize.py` — job-level outputs and provenance
+- `app/services/importer.py` — non-destructive import with compatibility reporting
+
 ## Tests
 
-**562 passing**, 0 failing. ruff clean, mypy clean (34 files), pre-publish
-audit clean (78 tracked files), smoke test green (9 checks).
+**671 passing**, 0 failing. ruff clean, mypy clean (39 files), pre-publish
+audit clean (89 tracked files), smoke test green (9 checks).
 Plus 5 live Ollama tests (opt-in marker `live_ollama`, deselected in CI) that
 pass against the real Ollama 0.32.6 + qwen2.5vl:7b on this machine.
 
@@ -89,6 +97,10 @@ pass against the real Ollama 0.32.6 + qwen2.5vl:7b on this machine.
 - `tests/unit/test_ollama_local.py` — 43
 - `tests/unit/test_cloud_providers.py` — 60
 - `tests/unit/test_credentials.py` — 28
+- `tests/unit/test_visual_stage.py` — 26
+- `tests/unit/test_enrich_and_assemble.py` — 45
+- `tests/unit/test_finalize_and_import.py` — 28
+- `tests/integration/test_pipeline_end_to_end.py` — 22 total
 
 ## Failures / blockers
 
@@ -112,29 +124,31 @@ None.
 
 ## Next action
 
-Stage 3 is built but **not yet wired into the pipeline**. Do that first, then
-Phase 5.
+Phase 6 — Collections. Build in this order:
 
-1. `app/pipeline/visual.py` — Stage 3 orchestration: build `AnalysisRequest`
-   batches from `frames_manifest.json`, run through `call_with_retries`, persist
-   each batch atomically before marking it completed (never re-send a completed
-   batch), enforce `BudgetTracker.check_before_send`, write skip records, and
-   settle as `completed_with_gaps` when any frame was skipped.
-2. Wire it into `app/pipeline/stages.py` and `Worker.process_video`, gated on
-   `settings.visual_analysis.enabled`.
-3. `app/pipeline/enrich.py` — deterministic local enrichment only (emphasis,
-   timeframe switches, time-window segment classification). No external text
-   model.
-4. `app/pipeline/assemble.py` — chronological `assembled.txt` per video;
-   `master_assembled.txt` only for multi-video jobs in confirmed order.
-5. `app/pipeline/archive.py` — per-video permanent archive + per-job
-   `analysis_input` with a frame-mapping README.
-6. `app/services/importer.py` — replace the honest stub with the real import.
-7. Versioned reruns: video, batch range, low-confidence only, fallback output,
-   new prompt/schema/model. Never overwrite prior expensive output.
+1. `app/collections/model.py` — create/read/update collections, ordered sources
+   with **immutable** `source_version` references. A source video reprocessed
+   later must not change an existing collection; the user rebuilds deliberately.
+2. `app/collections/assemble.py` — Mode A: `collection_assembled.txt`
+   concatenating source `assembled.txt` in exact collection order, with the
+   `<video sequence="N" source_video_id="..." processed_version="N">` boundaries
+   from spec §7. Plus `collection_manifest.json` (ordered sources, IDs,
+   versions, checksums, configuration, warning state, token method, timestamps,
+   output checksums) and `collection_readme.md`.
+3. `app/collections/packs.py` — Mode B: context-window packs. Usable budget =
+   target limit minus reserve. Prefer boundaries between videos; never split a
+   video by default; when the user permits a split, cut at segment boundaries
+   with a small explicit overlap and recorded provenance. Emit
+   `collection-pack-001.md` …, `collection-pack-manifest.json`,
+   `collection_readme.md`.
+4. `app/collections/tokens.py` — estimation, clearly labelled an estimate.
+5. Warning states: `Completed with gaps`, missing descriptions, incompatible
+   provenance, unavailable artifacts — all **warn but permit**.
+6. Output to `collections/<collection-id>/<collection-version>/`, never merged
+   into a processed-video directory. Reference/symlink frames.
 
-Test: 1/2/20-video assembly, ordering, imports, rerun version immutability, and
-that a completed paid batch is never re-sent on resume.
+Zero Stage 3 calls anywhere in Collections — assert it in a test by
+monkeypatching `build_provider` to raise.
 
 ## Continuation prompt
 
