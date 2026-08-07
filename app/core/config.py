@@ -339,3 +339,104 @@ def load_settings(
     )
     settings.validate()
     return settings
+
+
+# ── Saving ────────────────────────────────────────────────────────────────
+
+
+def _toml_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def render_settings_toml(settings: Settings) -> str:
+    """Render settings as TOML.
+
+    Written by hand rather than with a serialiser so the file keeps its
+    comments. A settings file a person can read and edit is worth more here
+    than one a library round-trips perfectly — this is the file someone opens
+    when the interface is not in front of them.
+
+    ``output_root`` is deliberately included: it is the one path the user chose
+    and losing it on save would silently reset the application to first-run.
+    """
+    visual = settings.visual_analysis
+    return f"""# Written by Video to LLM. Safe to edit by hand.
+# Anything omitted falls back to the shipped default.
+
+[general]
+output_root = {_toml_value(str(settings.output_root) if settings.output_root else "")}
+
+[server]
+# The bind host is fixed to the loopback interface in code and is not
+# configurable. There is no LAN mode.
+port = {settings.port}
+
+[sampling]
+preset = {_toml_value(settings.sampling.preset)}
+custom_interval_seconds = {settings.sampling.custom_interval_seconds}
+
+[transcription]
+backend = {_toml_value(settings.transcription.backend)}
+model = {_toml_value(settings.transcription.model)}
+silence_threshold_seconds = {settings.transcription.silence_threshold_seconds}
+language = {_toml_value(settings.transcription.language)}
+
+[visual_analysis]
+# Off by default. A local-only job never touches this section.
+enabled = {_toml_value(visual.enabled)}
+# none | ollama_local | anthropic | google | openai | openai_compatible
+provider = {_toml_value(visual.provider)}
+# Free text. Never validated against a fixed catalogue.
+model_id = {_toml_value(visual.model_id)}
+
+[visual_analysis.budget]
+# External providers only. A model on this computer has no provider charge.
+hard_limit_usd = {visual.budget.hard_limit_usd}
+on_limit = {_toml_value(visual.budget.on_limit)}
+
+[visual_analysis.local_guard]
+max_runtime_minutes = {visual.local_guard.max_runtime_minutes}
+max_frames_per_run = {visual.local_guard.max_frames_per_run}
+
+[ollama]
+# Loopback hosts only. Anything else is rejected outright.
+endpoint = {_toml_value(settings.ollama.endpoint)}
+batch_size = {settings.ollama.batch_size}
+concurrency = {settings.ollama.concurrency}
+experimental_acknowledged = {_toml_value(settings.ollama.experimental_acknowledged)}
+
+[worker]
+poll_interval_seconds = {settings.worker.poll_interval_seconds}
+max_retries = {settings.worker.max_retries}
+backoff_base_seconds = {settings.worker.backoff_base_seconds}
+
+[collections]
+default_token_limit = {settings.collections.default_token_limit}
+default_reserve_tokens = {settings.collections.default_reserve_tokens}
+allow_video_split = {_toml_value(settings.collections.allow_video_split)}
+"""
+
+
+def save_settings(settings: Settings, *, path: Path | None = None) -> Path:
+    """Validate, then write settings to disk atomically.
+
+    Validation runs first so an unusable configuration is refused rather than
+    written — a settings file that stops the application from starting is much
+    harder to recover from than a rejected form.
+    """
+    settings.validate()
+
+    target = Path(path) if path is not None else settings_file()
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    # Imported here rather than at module scope: artifacts imports the logging
+    # module, which imports redaction, and config is loaded before either.
+    from app.core.artifacts import write_text
+
+    write_text(target, render_settings_toml(settings))
+    return target

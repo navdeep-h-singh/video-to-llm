@@ -25,6 +25,7 @@ from app.core.config import Settings, assert_loopback
 from app.core.db import database_path, open_database
 from app.core.locks import claim_is_stale
 from app.core.logging import get_logger
+from app.services.doctor import run_doctor
 from app.web import status as status_module
 
 logger = get_logger(__name__)
@@ -52,6 +53,14 @@ def create_app(settings: Settings) -> FastAPI:
     # property of this application that must never quietly change.
     assert_loopback(settings.host, context="server bind host")
 
+    # Settings are a frozen dataclass captured by every route closure, so a
+    # save has to rebind this holder or the screens would keep showing the old
+    # values until the process restarted.
+    live: dict[str, Settings] = {"settings": settings}
+
+    def current() -> Settings:
+        return live["settings"]
+
     app = FastAPI(
         title="Video to LLM",
         description="Runs only on this computer.",
@@ -65,19 +74,20 @@ def create_app(settings: Settings) -> FastAPI:
     # ── Shared context ────────────────────────────────────────────────────
 
     def connect() -> sqlite3.Connection | None:
-        root = settings.output_root
+        root = current().output_root
         if root is None or not database_path(root).exists():
             return None
         return open_database(root, migrate_on_open=False)
 
     def worker_state(connection: sqlite3.Connection | None) -> status_module.StatusPresentation:
-        if connection is None or settings.output_root is None:
+        active = current()
+        if connection is None or active.output_root is None:
             return status_module.StatusPresentation(
                 "stopped", "Not started", "status-ready", "hollow square"
             )
         row = connection.execute(
             "SELECT * FROM worker_claims WHERE output_root = ?",
-            (str(settings.output_root),),
+            (str(active.output_root),),
         ).fetchone()
         if row is None:
             return status_module.StatusPresentation(
@@ -92,7 +102,7 @@ def create_app(settings: Settings) -> FastAPI:
         )
 
     def disk_label() -> str:
-        root = settings.output_root
+        root = current().output_root
         if root is None:
             return "No folder chosen"
         try:
@@ -117,19 +127,19 @@ def create_app(settings: Settings) -> FastAPI:
             "imports": str(imports) if imports else "",
         }
 
-    def nav(current: str, connection: sqlite3.Connection | None) -> list[NavGroup]:
+    def nav(screen: str, connection: sqlite3.Connection | None) -> list[NavGroup]:
         found = counts(connection)
         return [
             NavGroup(
                 "Videos",
                 [
-                    NavItem("Dashboard", "/", found["jobs"], current == "dashboard"),
-                    NavItem("New job", "/jobs/new", "", current == "newjob"),
+                    NavItem("Dashboard", "/", found["jobs"], screen == "dashboard"),
+                    NavItem("New job", "/jobs/new", "", screen == "newjob"),
                     NavItem(
                         "Bring in earlier work",
                         "/imports",
                         found["imports"],
-                        current == "imports",
+                        screen == "imports",
                     ),
                 ],
             ),
@@ -140,16 +150,16 @@ def create_app(settings: Settings) -> FastAPI:
                         "Collections",
                         "/collections",
                         found["collections"],
-                        current == "collections",
+                        screen == "collections",
                     ),
-                    NavItem("New collection", "/collections/new", "", current == "newcollection"),
+                    NavItem("New collection", "/collections/new", "", screen == "newcollection"),
                 ],
             ),
             NavGroup(
                 "This computer",
                 [
-                    NavItem("Settings & checks", "/settings", "", current == "settings"),
-                    NavItem("First-run check", "/launch", "", current == "launch"),
+                    NavItem("Settings & checks", "/settings", "", screen == "settings"),
+                    NavItem("First-run check", "/launch", "", screen == "launch"),
                 ],
             ),
         ]
@@ -161,7 +171,7 @@ def create_app(settings: Settings) -> FastAPI:
                 "nav_groups": nav(screen, connection),
                 "worker": worker_state(connection),
                 "disk_label": disk_label(),
-                "settings": settings,
+                "settings": current(),
                 "status": status_module,
             }
             base.update(context)
@@ -177,8 +187,8 @@ def create_app(settings: Settings) -> FastAPI:
         return JSONResponse(
             {
                 "status": "ok",
-                "bound_to": settings.host,
-                "output_root_set": settings.output_root is not None,
+                "bound_to": current().host,
+                "output_root_set": current().output_root is not None,
             }
         )
 
@@ -186,7 +196,7 @@ def create_app(settings: Settings) -> FastAPI:
     def dashboard(request: Request) -> Response:
         # A machine that has never been set up goes to the readiness screen
         # rather than an empty dashboard that explains nothing.
-        if settings.output_root is None:
+        if current().output_root is None:
             return RedirectResponse("/launch", status_code=303)
 
         connection = connect()
@@ -225,7 +235,7 @@ def create_app(settings: Settings) -> FastAPI:
     def launch(request: Request) -> HTMLResponse:
         from app.services.doctor import run_doctor
 
-        report = run_doctor(settings)
+        report = run_doctor(current())
         return page(request, "launch.html", "launch", report=report)
 
     @app.get("/jobs/new", response_class=HTMLResponse)
@@ -311,24 +321,8 @@ def create_app(settings: Settings) -> FastAPI:
         return page(request, "imports.html", "imports", imports=rows)
 
     @app.get("/settings", response_class=HTMLResponse)
-    def settings_screen(request: Request) -> HTMLResponse:
-        from app.credentials.store import ENV_VARS, credential_status
-        from app.services.doctor import run_doctor
-
-        # Presence only. A stored key is never sent to the browser, not even
-        # partially masked — a few revealed characters still narrow a search.
-        credentials = [
-            {"provider": name, "status": credential_status(name)}
-            for name in ("anthropic", "google", "openai", "openai_compatible")
-        ]
-        return page(
-            request,
-            "settings.html",
-            "settings",
-            report=run_doctor(settings),
-            credentials=credentials,
-            env_vars=ENV_VARS,
-        )
+    def settings_screen(request: Request) -> Response:
+        return _settings_page(request)
 
     @app.get("/collections", response_class=HTMLResponse)
     def collections_screen(request: Request) -> HTMLResponse:
@@ -350,9 +344,10 @@ def create_app(settings: Settings) -> FastAPI:
 
         connection = connect()
         sources: list[Any] = []
+        root = current().output_root
         try:
-            if connection is not None and settings.output_root is not None:
-                sources = available_sources(connection, settings.output_root)
+            if connection is not None and root is not None:
+                sources = available_sources(connection, root)
         finally:
             if connection is not None:
                 connection.close()
@@ -453,20 +448,20 @@ def create_app(settings: Settings) -> FastAPI:
         resolved = provider
         if provider == "external":
             resolved = (
-                settings.visual_analysis.provider
-                if settings.visual_analysis.provider not in {"none", "ollama_local"}
+                current().visual_analysis.provider
+                if current().visual_analysis.provider not in {"none", "ollama_local"}
                 else "none"
             )
 
         try:
             result = create_job(
                 connection,
-                settings,
+                current(),
                 name=name,
                 paths=parse_paths(paths),
                 interval_ms=interval_ms,
                 provider=resolved,
-                model_id=settings.visual_analysis.model_id,
+                model_id=current().visual_analysis.model_id,
             )
             if result.ok:
                 return RedirectResponse(f"/jobs/{result.job_id}", status_code=303)
@@ -537,7 +532,8 @@ def create_app(settings: Settings) -> FastAPI:
         )
 
         connection = connect()
-        if connection is None or settings.output_root is None:
+        root = current().output_root
+        if connection is None or root is None:
             return RedirectResponse("/launch", status_code=303)
 
         try:
@@ -549,7 +545,7 @@ def create_app(settings: Settings) -> FastAPI:
                     request,
                     "newcollection.html",
                     "newcollection",
-                    sources=available_sources(connection, settings.output_root),
+                    sources=available_sources(connection, root),
                     problems=["Give the collection a name and choose at least one video."],
                 )
 
@@ -562,20 +558,131 @@ def create_app(settings: Settings) -> FastAPI:
                 target_model_label=target_model_label,
                 allow_video_split=bool(allow_video_split),
             )
-            sources = [
-                assess_source(connection, video_id, settings.output_root) for video_id in chosen
-            ]
+            sources = [assess_source(connection, video_id, root) for video_id in chosen]
             set_sources(connection, collection_id, [s for s in sources if s])
 
             collection = load_collection(connection, collection_id)
             if collection is not None:
                 # Building is local, free, and takes seconds, so it happens
                 # immediately rather than behind another confirmation.
-                build_collection(connection, collection, output_root=settings.output_root)
+                build_collection(connection, collection, output_root=root)
 
             return RedirectResponse(f"/collections/{collection_id}", status_code=303)
         finally:
             connection.close()
+
+    # ── Settings ──────────────────────────────────────────────────────────
+
+    @app.post("/settings")
+    def save_settings_route(
+        request: Request,
+        enabled: str = Form(""),
+        provider: str = Form("none"),
+        model_id: str = Form(""),
+        endpoint: str = Form("http://127.0.0.1:11434"),
+        batch_size: int = Form(1),
+        acknowledged: str = Form(""),
+    ) -> Response:
+        """Save the description settings.
+
+        Validation happens before the write, so a configuration that would stop
+        the application from starting is refused rather than persisted.
+        """
+        from dataclasses import replace
+
+        from app.core.config import NonLoopbackAddressError, save_settings
+
+        active = current()
+        want_enabled = bool(enabled) and provider != "none"
+
+        candidate = replace(
+            active,
+            visual_analysis=replace(
+                active.visual_analysis,
+                enabled=want_enabled,
+                provider=provider,
+                model_id=model_id.strip(),
+            ),
+            ollama=replace(
+                active.ollama,
+                endpoint=endpoint.strip() or "http://127.0.0.1:11434",
+                batch_size=max(1, min(4, batch_size)),
+                experimental_acknowledged=bool(acknowledged),
+            ),
+        )
+
+        problems: list[str] = []
+        if want_enabled and provider == "ollama_local" and not model_id.strip():
+            problems.append(
+                "Name the model you installed, for example qwen2.5vl:7b. "
+                "Use Check local model to see what is available."
+            )
+
+        if not problems:
+            try:
+                save_settings(candidate)
+            except NonLoopbackAddressError as error:
+                problems.append(str(error))
+            except OSError as error:
+                problems.append(f"The settings could not be saved: {error}")
+            else:
+                live["settings"] = candidate
+                return RedirectResponse("/settings?saved=1", status_code=303)
+
+        return _settings_page(request, problems=problems, draft=candidate)
+
+    @app.post("/settings/check-local")
+    def check_local_route(request: Request) -> Response:
+        """Ask the local runtime what it is and what it has.
+
+        Health only — nothing is generated and nothing is charged.
+        """
+        from app.core.config import NonLoopbackAddressError
+        from app.providers.ollama_local import OllamaLocalProvider
+
+        active = current()
+        try:
+            provider = OllamaLocalProvider(
+                endpoint=active.ollama.endpoint,
+                model_id=active.visual_analysis.model_id,
+            )
+            health = provider.health_check()
+        except NonLoopbackAddressError as error:
+            return _settings_page(request, problems=[str(error)])
+        except Exception as error:
+            from app.core.redaction import redacted_exception_text
+
+            return _settings_page(
+                request, problems=[f"The check could not run: {redacted_exception_text(error)}"]
+            )
+
+        return _settings_page(request, health=health)
+
+    def _settings_page(
+        request: Request,
+        *,
+        problems: list[str] | None = None,
+        health: Any = None,
+        draft: Settings | None = None,
+    ) -> HTMLResponse:
+        from app.credentials.store import ENV_VARS, credential_status
+
+        credentials = [
+            {"provider": name, "status": credential_status(name)}
+            for name in ("anthropic", "google", "openai", "openai_compatible")
+        ]
+        return page(
+            request,
+            "settings.html",
+            "settings",
+            report=run_doctor(current()),
+            credentials=credentials,
+            env_vars=ENV_VARS,
+            problems=problems or [],
+            health=health,
+            draft=draft or current(),
+            saved=request.query_params.get("saved") == "1",
+        )
 
     return app
 

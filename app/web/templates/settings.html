@@ -23,6 +23,21 @@
   </table>
 </div>
 
+{% if saved %}
+<div class="panel" style="border-left:3px solid var(--color-accent)" role="status">
+  <p style="margin:0">Saved. New jobs will use these settings.</p>
+</div>
+{% endif %}
+
+{% if problems %}
+<div class="panel" style="border-left:3px solid var(--color-accent)" role="alert">
+  <h4 style="margin:0 0 var(--space-2)">That could not be saved</h4>
+  <ul style="margin:0;padding-left:var(--space-4);font-size:14px">
+    {% for problem in problems %}<li>{{ problem }}</li>{% endfor %}
+  </ul>
+</div>
+{% endif %}
+
 <div class="panel">
   <div class="panel-head">
     <h4 style="margin:0">Describing what is on screen</h4>
@@ -33,31 +48,130 @@
     and a transcript, and you can add descriptions later without redoing anything.
   </p>
 
-  <h5 style="margin-top:var(--space-4)">On this computer</h5>
-  <p style="font-size:14px;margin:0">
-    Frames stay on this device. No provider API charge. Local compute, battery,
-    heat, memory use, and processing time apply.
-  </p>
-  <p class="note" style="margin-top:var(--space-2)">
-    Local models may be less reliable for tiny text, dense labels, exact values,
-    and strict structured extraction. Review low-confidence results.
-  </p>
-  <dl style="display:grid;grid-template-columns:auto 1fr;gap:var(--space-1) var(--space-4);
-             font-size:13px;margin-top:var(--space-3)">
-    <dt class="text-muted">Where</dt><dd class="mono" style="margin:0">{{ settings.ollama.endpoint }}</dd>
-    <dt class="text-muted">Model</dt><dd class="mono" style="margin:0">{{ settings.visual_analysis.model_id or "not chosen" }}</dd>
-    <dt class="text-muted">Pictures at once</dt><dd style="margin:0">{{ settings.ollama.batch_size }}</dd>
-  </dl>
-  <p class="text-muted" style="font-size:12px;margin-top:var(--space-2)">
-    Only a model running on this computer is accepted. This version will not talk
-    to one anywhere else.
-  </p>
-  <a class="btn btn-secondary" style="margin-top:var(--space-2);align-self:flex-start"
-     href="/settings">Check local model</a>
+  <form method="post" action="/settings">
+    <label class="radio" style="margin-bottom:var(--space-3)">
+      <input type="checkbox" name="enabled" value="1"
+             {% if draft.visual_analysis.enabled %}checked{% endif %}>
+      <span class="dot" aria-hidden="true"></span>
+      <span>Describe the pictures</span>
+    </label>
+
+    <fieldset style="border:0;padding:0;margin:0 0 var(--space-4)">
+      <legend class="visually-hidden">Which model should describe them?</legend>
+      <div class="grid grid-2">
+        <label class="pick" style="cursor:pointer">
+          <input type="radio" name="provider" value="ollama_local"
+                 {% if draft.visual_analysis.provider == 'ollama_local' %}checked{% endif %}
+                 style="position:absolute;opacity:0;width:0;height:0">
+          <span class="pick-title">On this computer</span>
+          <span class="pick-body">Uses a model you installed yourself.</span>
+          <span class="pick-body text-muted" style="display:block;margin-top:var(--space-2)">
+            No provider API charge &middot; uses your battery and time
+          </span>
+        </label>
+        <label class="pick" style="cursor:pointer">
+          <input type="radio" name="provider" value="none"
+                 {% if draft.visual_analysis.provider not in ('ollama_local',) %}checked{% endif %}
+                 style="position:absolute;opacity:0;width:0;height:0">
+          <span class="pick-title">Not at all</span>
+          <span class="pick-body">Pictures and spoken words only.</span>
+          <span class="pick-body text-muted" style="display:block;margin-top:var(--space-2)">
+            No charge &middot; fastest
+          </span>
+        </label>
+      </div>
+    </fieldset>
+
+    <h5>On this computer</h5>
+    <p style="font-size:14px;margin:0">
+      Frames stay on this device. No provider API charge. Local compute, battery,
+      heat, memory use, and processing time apply.
+    </p>
+    <p class="note" style="margin-top:var(--space-2)">
+      Local models may be less reliable for tiny text, dense labels, exact values,
+      and strict structured extraction. Review low-confidence results.
+    </p>
+
+    <div class="grid grid-3" style="margin-top:var(--space-3)">
+      <div class="field">
+        <label for="model-id">Which model?</label>
+        <input class="input mono" id="model-id" name="model_id"
+               value="{{ draft.visual_analysis.model_id }}"
+               placeholder="qwen2.5vl:7b" aria-describedby="model-help">
+        <p id="model-help" class="text-muted" style="font-size:12px;margin-top:var(--space-1)">
+          Free text &mdash; whatever you installed. A suggestion, not a fixed list.
+        </p>
+      </div>
+      <div class="field">
+        <label for="endpoint">Where is it answering?</label>
+        <input class="input mono" id="endpoint" name="endpoint"
+               value="{{ draft.ollama.endpoint }}" aria-describedby="endpoint-help">
+        <p id="endpoint-help" class="text-muted" style="font-size:12px;margin-top:var(--space-1)">
+          Only a model on this computer is accepted.
+        </p>
+      </div>
+      <div class="field">
+        <label for="batch-size">Pictures at a time</label>
+        <input class="input mono" id="batch-size" name="batch_size" type="number"
+               min="1" max="4" value="{{ draft.ollama.batch_size }}"
+               aria-describedby="batch-help">
+        <p id="batch-help" class="text-muted" style="font-size:12px;margin-top:var(--space-1)">
+          1 is the safe default. 3&ndash;4 need plenty of memory.
+        </p>
+      </div>
+    </div>
+
+    <label class="radio" style="margin-top:var(--space-2)">
+      <input type="checkbox" name="acknowledged" value="1"
+             {% if draft.ollama.experimental_acknowledged %}checked{% endif %}>
+      <span class="dot" aria-hidden="true"></span>
+      <span>I understand this is experimental and will check low-confidence results</span>
+    </label>
+
+    <div style="margin-top:var(--space-4);display:flex;gap:var(--space-2)">
+      <button class="btn btn-primary" type="submit">Save</button>
+    </div>
+  </form>
+
+  <form method="post" action="/settings/check-local" style="margin-top:var(--space-3)">
+    <button class="btn btn-secondary" type="submit">Check local model</button>
+  </form>
+
+  {% if health %}
+  <div class="panel" style="margin-top:var(--space-3)" role="status">
+    <h5 style="margin:0 0 var(--space-2)">What the check found</h5>
+    <table class="table">
+      <caption class="visually-hidden">Local model check results</caption>
+      <tbody>
+        <tr>
+          <td>Is anything answering on this computer?</td>
+          <td>{{ "Yes" if health.reachable else "No" }}</td>
+        </tr>
+        {% if health.runtime_version %}
+        <tr><td>Version</td><td class="mono">{{ health.runtime_version }}</td></tr>
+        {% endif %}
+        {% if health.model_available is not none %}
+        <tr>
+          <td>Is the model installed?</td>
+          <td>{{ "Found" if health.model_available else "Not installed" }}</td>
+        </tr>
+        {% endif %}
+        <tr><td>Can it read pictures?</td><td>{{ health.vision_status_label }}</td></tr>
+      </tbody>
+    </table>
+    <p style="font-size:14px;margin-top:var(--space-2)">{{ health.detail }}</p>
+    {% if health.remediation %}
+      <pre class="note" style="white-space:pre-wrap;font-size:13px;overflow-x:auto">{{ health.remediation }}</pre>
+    {% endif %}
+    {% if health.advisory %}
+      <p class="text-muted" style="font-size:12px">{{ health.advisory }}</p>
+    {% endif %}
+  </div>
+  {% endif %}
 
   <h5 style="margin-top:var(--space-6)">Services you have an account with</h5>
   <p style="font-size:14px;margin:0">
-    Only the numbered still pictures are sent — never your video and never its
+    Only the numbered still pictures are sent &mdash; never your video and never its
     audio. You see what will be sent and roughly what it costs before anything
     leaves this computer, and sending stops at your cap.
   </p>
