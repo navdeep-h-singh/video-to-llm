@@ -3,8 +3,8 @@
 > Read this file, `docs/DECISIONS.md`, `BUILDPLAN.md`, and `git status` before
 > doing any work in a new session.
 
-**Current phase:** 7 — UI (11 screens from the supplied design)
-**Overall:** 6 of 9 phases complete
+**Current phase:** 8 — Recovery, accessibility, cross-platform setup, smoke hardening
+**Overall:** 7 of 9 phases complete
 
 ## Environment (verified 2026-08-06)
 
@@ -81,10 +81,16 @@
 - `app/core/redaction.py` — **fixed** a key-matching false positive that masked
   `token_limit`, `input_tokens`, and every token count in manifests
 
+### Phase 7 — UI ✅ (commit `f447560`)
+- `app/web/static/tokens.css` — Modernist tokens, no external resources
+- `app/web/status.py` — status vocabulary: text + shape + colour
+- `app/web/app.py` — routes reading real state
+- `app/web/templates/` — all 11 screens + base + macros
+
 ## Tests
 
-**765 passing**, 0 failing. ruff clean, mypy clean (43 files), pre-publish
-audit clean (91 tracked files), smoke test green (9 checks).
+**829 passing**, 0 failing. ruff clean, mypy clean (44 files), pre-publish
+audit clean (92 tracked files), smoke test green (9 checks).
 Plus 5 live Ollama tests (opt-in marker `live_ollama`, deselected in CI) that
 pass against the real Ollama 0.32.6 + qwen2.5vl:7b on this machine.
 
@@ -110,6 +116,7 @@ pass against the real Ollama 0.32.6 + qwen2.5vl:7b on this machine.
 - `tests/integration/test_pipeline_end_to_end.py` — 22 total
 - `tests/unit/test_collections.py` — 55
 - `tests/unit/test_redaction.py` — 76 (incl. key false-positive regressions)
+- `tests/unit/test_web_ui.py` — 64
 
 ## Failures / blockers
 
@@ -133,29 +140,21 @@ None.
 
 ## Next action
 
-Phase 7 — the UI. The design is at `design_reference/video_pipeline_ux.dc.html`
-(git-ignored). It is a `dc` template: markup in `<x-dc>`, data model in the
-`<script type="text/x-dc">` block at the end. Port it to Jinja2 + vanilla JS.
+Phase 8 — recovery, accessibility, cross-platform, smoke hardening.
 
-1. `app/web/static/tokens.css` — the Modernist tokens (already extracted; the
-   palette, Archivo font stack, 0 border-radius, and the `.btn`/`.card`/`.tag`/
-   `.table`/`.seg` component classes).
-2. `app/web/templates/base.html` — the shell: header with the "Runs only on this
-   computer" badge, worker status, disk label, and the three-group sidebar
-   (Videos / Collections / This computer).
-3. The 11 screens, in the design's own order: `launch` (first-run readiness),
-   `dashboard`, `newjob`, `job`, `review`, `outputs`, `imports`, `settings`,
-   `collections`, `newcollection`, `collection`.
-4. `app/web/routes/` — read from the real database; no invented data.
-5. Status vocabulary: text + icon + colour for all ten states.
+1. Pause / resume / cancel: routes + worker handling, preserving valid output.
+2. Recovery tests: kill mid-stage, sleep/wake, unmounted output root, database
+   locked by another process.
+3. `scripts/setup_macos.sh`, `scripts/setup_windows.ps1`, `scripts/setup_linux.sh`,
+   `scripts/verify_install.py` — checks and guidance, **not** installers.
+4. Extend `video-to-llm smoke-test` to cover stages 1–2 on generated media plus
+   a collection build, still with no network.
+5. Accessibility pass: keyboard operation end to end, focus order, contrast
+   check against WCAG 2.2 AA for the Modernist palette.
+6. POST routes for the forms already rendered (new job, new collection) so the
+   UI is operable, not just readable.
 
-Non-negotiables while building:
-- Plain language throughout — the design deliberately says "pictures" not
-  "frames", "Runs only on this computer", "No provider API charge".
-- No API terminology anywhere before the user opts in.
-- A stored key is never displayed, not even partially masked.
-- WCAG 2.2 AA, full keyboard operation, graceful at 1024px.
-- Collection generation is safe and local: no heavy confirmation dialogs.
+Then Phase 9: docs, final quality/security pass, `docs/FINAL_BUILD_REPORT.md`.
 
 ## Continuation prompt
 
