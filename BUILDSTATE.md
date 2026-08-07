@@ -3,8 +3,8 @@
 > Read this file, `docs/DECISIONS.md`, `BUILDPLAN.md`, and `git status` before
 > doing any work in a new session.
 
-**Current phase:** 3 — Stages 1–2 (frames + local transcription) on a synthetic CPU path
-**Overall:** 2 of 9 phases complete
+**Current phase:** 4 — Provider protocol and adapters
+**Overall:** 3 of 9 phases complete
 
 ## Environment (verified 2026-08-06)
 
@@ -41,10 +41,24 @@
 - `app/cli/main.py` — all seven commands
 - `app/web/app.py` — app factory asserting the loopback boundary (screens: Phase 7)
 
+### Phase 3 — Stages 1–2 ✅ (commit `9eb7d07`)
+- `tests/fixtures/synthetic.py` — generated video/audio; codec pair follows the
+  container (WebM needs VP8/Opus, not H.264/AAC)
+- `app/pipeline/probe.py` — ffprobe wrapper, argument arrays never shell strings
+- `app/pipeline/frames.py` — deterministic `plan_frames`, clean 1280x720 JPEGs +
+  `IDX nn` provider copies, `frames_manifest.json`
+- `app/pipeline/audio.py` — audio extraction, silencedetect parsing, speech
+  segment inversion with padding
+- `app/pipeline/transcribe.py` — backend resolver with mandatory CPU fallback,
+  timeline remapping, silence markers, provenance
+- `app/pipeline/preflight.py` — SHA-256 fingerprint, duplicates, disk, types
+- `app/pipeline/stages.py` — stage orchestration, skip-if-complete
+- `app/worker/runner.py` — real `process_job` / `process_video`
+
 ## Tests
 
-**246 passing**, 0 failing. ruff clean, mypy clean (22 files), pre-publish
-audit clean (51 tracked files), smoke test green (9 checks).
+**367 passing**, 0 failing. ruff clean, mypy clean (28 files), pre-publish
+audit clean (60 tracked files), smoke test green (9 checks).
 
 - `tests/unit/test_redaction.py` — 37
 - `tests/unit/test_repository_hygiene.py` — 14
@@ -53,7 +67,11 @@ audit clean (51 tracked files), smoke test green (9 checks).
 - `tests/unit/test_artifacts.py` — 20
 - `tests/unit/test_locks.py` — 20
 - `tests/unit/test_reconcile.py` — 23
-- `tests/unit/test_worker_and_cli.py` — 30
+- `tests/unit/test_worker_and_cli.py` — 31
+- `tests/unit/test_frames.py` — 36
+- `tests/unit/test_transcription.py` — 38
+- `tests/unit/test_preflight.py` — 34
+- `tests/integration/test_pipeline_end_to_end.py` — 12 (real FFmpeg, stub model)
 
 ## Failures / blockers
 
@@ -77,33 +95,38 @@ None.
 
 ## Next action
 
-Phase 3 — Stages 1 and 2 on a synthetic CPU path. Build in this order:
+Phase 4 — provider protocol and adapters. Build in this order:
 
-1. `tests/fixtures/synthetic.py` — generate tiny videos with FFmpeg (colour
-   patterns + tones, known duration) so every later test has real media without
-   any personal file entering the repo.
-2. `app/pipeline/probe.py` — ffprobe wrapper: duration, container, dimensions,
-   audio-stream presence. Subprocess argument arrays, never shell strings.
-3. `app/pipeline/fingerprint.py` — SHA-256 of the source, computed before
-   acceptance so duplicates are caught before expensive work starts.
-4. `app/pipeline/preflight.py` — readable input, supported type, duration, disk
-   headroom, duplicate check, output root, tool availability, interval,
-   expected frame/batch counts, provider config.
-5. `app/pipeline/frames.py` — fixed-interval extraction to clean 1280x720 JPEGs
-   (`000047_t092000.jpg`), separate small top-left `IDX 01` provider copies,
-   `frames_manifest.json`, and `frame_interval_ms` made immutable once started.
-6. `app/pipeline/audio.py` — FFmpeg audio extraction + silence detection (>3 s),
-   `silence_windows.json`.
-7. `app/pipeline/transcribe.py` — backend resolver (`auto`/`cpu`/`metal`/`cuda`/
-   `vulkan`) with mandatory CPU fallback, faster-whisper over non-silent chunks
-   with padding, timestamps remapped onto the original timeline, silence markers
-   inserted, `transcript.json` + provenance.
-8. Wire both stages into `Worker.process_job`, replacing the placeholder.
+1. `app/providers/base.py` — `VisualAnalysisProvider` protocol: normalized
+   request in, normalized schema out. Strict output fields per spec §6:
+   `index`, `timeframe`, `currency_pair`, `indicators_and_states`,
+   `exact_action`, `visible_text`, `visual_description`, `setup_type`,
+   `confidence`. Preserve `Unknown`; never invent values.
+2. `app/credentials/store.py` — keyring first, process env second, **never a
+   plaintext fallback**. Register every value read with `register_secret()`.
+3. `app/providers/ollama_local.py` — loopback-only guard reusing
+   `is_loopback_host`, no credential field at all, default batch 1 (2 after
+   preflight, 3–4 advanced override only), concurrency 1, `Check local model`
+   health probe reporting reachability/version/model/vision capability, and the
+   `Vision capability not verified` path requiring acknowledgement.
+4. `app/providers/anthropic.py`, `google.py`, `openai.py`, `openai_compatible.py`
+   — cloud batching up to 20, exact returned IDX alignment validation.
+5. `app/providers/costs.py` — versioned local estimation, hard budget stop
+   before a new paid batch. Local reports `No provider API charge`, never
+   `$0.00`.
+6. `app/providers/retry.py` — bounded backoff for transient errors, exactly one
+   corrective schema-format retry for invalid JSON, skip records on permanent
+   failure, `Completed with gaps`.
+7. Wire Stage 3 into `app/pipeline/stages.py` and the worker.
 
-Test intervals 0.5/1/2/3/5/10, frame index/timestamp mapping, duplicate
-handling, CPU fallback when an accelerator is claimed but absent, and timeline
-preservation across silence. Keep faster-whisper mocked in unit tests; one
-`@pytest.mark.slow` integration test may use the real tiny model.
+All tests use mocks (`respx` is already a dev dependency). No paid call is ever
+made. Add `tests/integration/test_live_ollama.py` behind the `live_ollama`
+marker — CI deselects it; it can run locally since Ollama 0.32.6 and
+`qwen2.5vl:7b` are installed on this machine.
+
+Critical invariants to test: never auto-fall-back from Local Ollama to cloud;
+never re-send a completed batch; loopback-only endpoints; no credential field
+for Ollama; keys never reach disk.
 
 ## Continuation prompt
 
