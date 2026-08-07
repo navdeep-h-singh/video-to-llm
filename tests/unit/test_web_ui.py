@@ -11,6 +11,8 @@ late:
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -458,3 +460,33 @@ def test_browsing_an_unreadable_place_explains_itself(client):
     payload = client.get("/api/browse?path=/definitely/not/a/real/place").json()
     # Falls back to the parent rather than erroring, or reports plainly.
     assert "ok" in payload
+
+
+def test_the_stylesheet_carries_a_cache_key(client):
+    """Upgrading under a running browser served the stylesheet it had cached,
+    so the page rendered with the old layout and looked broken rather than
+    out of date."""
+    body = client.get("/").text
+    assert "/static/tokens.css?v=" in body
+
+
+def test_the_cache_key_changes_when_the_stylesheet_does(client, monkeypatch):
+    import re
+
+    first = re.search(r"tokens\.css\?v=(\d+)", client.get("/").text).group(1)
+
+    real_stat = Path.stat
+
+    def newer(self, *args, **kwargs):
+        result = real_stat(self, *args, **kwargs)
+        if self.name == "tokens.css":
+
+            class Bumped:
+                st_mtime = result.st_mtime + 1000
+
+            return Bumped()
+        return result
+
+    monkeypatch.setattr(Path, "stat", newer)
+    second = re.search(r"tokens\.css\?v=(\d+)", client.get("/").text).group(1)
+    assert second != first

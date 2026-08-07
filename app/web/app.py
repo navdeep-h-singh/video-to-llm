@@ -76,6 +76,20 @@ def create_app(settings: Settings) -> FastAPI:
         openapi_url=None,
     )
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+    def asset_version() -> str:
+        """A cache key derived from the stylesheet's modification time.
+
+        Without it, upgrading the application leaves the browser showing the
+        stylesheet it cached before — the same failure mode as a running server
+        serving new templates from disk, and just as confusing, because the page
+        looks broken rather than out of date.
+        """
+        try:
+            return str(int((STATIC_DIR / "tokens.css").stat().st_mtime))
+        except OSError:
+            return "0"
+
     templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
 
     # ── Shared context ────────────────────────────────────────────────────
@@ -193,6 +207,7 @@ def create_app(settings: Settings) -> FastAPI:
                 # should be genuinely idle.
                 "has_running": running is not None,
                 "live_job_id": running["id"] if running else "",
+                "asset_version": asset_version(),
             }
             base.update(context)
             return templates.TemplateResponse(
