@@ -3,8 +3,8 @@
 > Read this file, `docs/DECISIONS.md`, `BUILDPLAN.md`, and `git status` before
 > doing any work in a new session.
 
-**Current phase:** 6 — Collections
-**Overall:** 5 of 9 phases complete
+**Current phase:** 7 — UI (11 screens from the supplied design)
+**Overall:** 6 of 9 phases complete
 
 ## Environment (verified 2026-08-06)
 
@@ -74,10 +74,17 @@
 - `app/pipeline/finalize.py` — job-level outputs and provenance
 - `app/services/importer.py` — non-destructive import with compatibility reporting
 
+### Phase 6 — Collections ✅ (commit `cbb183a`)
+- `app/collections/model.py` — immutable source-version references, warning states
+- `app/collections/tokens.py` — documented estimation, always labelled an estimate
+- `app/collections/build.py` — Mode A full document, Mode B context packs
+- `app/core/redaction.py` — **fixed** a key-matching false positive that masked
+  `token_limit`, `input_tokens`, and every token count in manifests
+
 ## Tests
 
-**671 passing**, 0 failing. ruff clean, mypy clean (39 files), pre-publish
-audit clean (89 tracked files), smoke test green (9 checks).
+**765 passing**, 0 failing. ruff clean, mypy clean (43 files), pre-publish
+audit clean (91 tracked files), smoke test green (9 checks).
 Plus 5 live Ollama tests (opt-in marker `live_ollama`, deselected in CI) that
 pass against the real Ollama 0.32.6 + qwen2.5vl:7b on this machine.
 
@@ -101,6 +108,8 @@ pass against the real Ollama 0.32.6 + qwen2.5vl:7b on this machine.
 - `tests/unit/test_enrich_and_assemble.py` — 45
 - `tests/unit/test_finalize_and_import.py` — 28
 - `tests/integration/test_pipeline_end_to_end.py` — 22 total
+- `tests/unit/test_collections.py` — 55
+- `tests/unit/test_redaction.py` — 76 (incl. key false-positive regressions)
 
 ## Failures / blockers
 
@@ -124,31 +133,29 @@ None.
 
 ## Next action
 
-Phase 6 — Collections. Build in this order:
+Phase 7 — the UI. The design is at `design_reference/video_pipeline_ux.dc.html`
+(git-ignored). It is a `dc` template: markup in `<x-dc>`, data model in the
+`<script type="text/x-dc">` block at the end. Port it to Jinja2 + vanilla JS.
 
-1. `app/collections/model.py` — create/read/update collections, ordered sources
-   with **immutable** `source_version` references. A source video reprocessed
-   later must not change an existing collection; the user rebuilds deliberately.
-2. `app/collections/assemble.py` — Mode A: `collection_assembled.txt`
-   concatenating source `assembled.txt` in exact collection order, with the
-   `<video sequence="N" source_video_id="..." processed_version="N">` boundaries
-   from spec §7. Plus `collection_manifest.json` (ordered sources, IDs,
-   versions, checksums, configuration, warning state, token method, timestamps,
-   output checksums) and `collection_readme.md`.
-3. `app/collections/packs.py` — Mode B: context-window packs. Usable budget =
-   target limit minus reserve. Prefer boundaries between videos; never split a
-   video by default; when the user permits a split, cut at segment boundaries
-   with a small explicit overlap and recorded provenance. Emit
-   `collection-pack-001.md` …, `collection-pack-manifest.json`,
-   `collection_readme.md`.
-4. `app/collections/tokens.py` — estimation, clearly labelled an estimate.
-5. Warning states: `Completed with gaps`, missing descriptions, incompatible
-   provenance, unavailable artifacts — all **warn but permit**.
-6. Output to `collections/<collection-id>/<collection-version>/`, never merged
-   into a processed-video directory. Reference/symlink frames.
+1. `app/web/static/tokens.css` — the Modernist tokens (already extracted; the
+   palette, Archivo font stack, 0 border-radius, and the `.btn`/`.card`/`.tag`/
+   `.table`/`.seg` component classes).
+2. `app/web/templates/base.html` — the shell: header with the "Runs only on this
+   computer" badge, worker status, disk label, and the three-group sidebar
+   (Videos / Collections / This computer).
+3. The 11 screens, in the design's own order: `launch` (first-run readiness),
+   `dashboard`, `newjob`, `job`, `review`, `outputs`, `imports`, `settings`,
+   `collections`, `newcollection`, `collection`.
+4. `app/web/routes/` — read from the real database; no invented data.
+5. Status vocabulary: text + icon + colour for all ten states.
 
-Zero Stage 3 calls anywhere in Collections — assert it in a test by
-monkeypatching `build_provider` to raise.
+Non-negotiables while building:
+- Plain language throughout — the design deliberately says "pictures" not
+  "frames", "Runs only on this computer", "No provider API charge".
+- No API terminology anywhere before the user opts in.
+- A stored key is never displayed, not even partially masked.
+- WCAG 2.2 AA, full keyboard operation, graceful at 1024px.
+- Collection generation is safe and local: no heavy confirmation dialogs.
 
 ## Continuation prompt
 
