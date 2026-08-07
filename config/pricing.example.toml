@@ -1,0 +1,52 @@
+# Copy to `config/pricing.toml` and edit. The real file is git-ignored.
+#
+# These are local, versioned estimation assumptions used to show a rough cost
+# before anything is sent. They are not fetched from any provider and they are
+# not authoritative. Providers change prices; check the provider's own pricing
+# page before relying on a figure shown here.
+#
+# Model identifiers are free text throughout the application. The entries below
+# are illustrative starting points, not a catalogue.
+
+version = 1
+currency = "USD"
+
+# Fallback used when a model has no entry below. Deliberately pessimistic so an
+# unknown model over-estimates rather than under-estimates.
+[default]
+input_per_million_tokens = 5.00
+output_per_million_tokens = 15.00
+tokens_per_image = 1600
+output_tokens_per_image = 320
+
+[anthropic]
+input_per_million_tokens = 3.00
+output_per_million_tokens = 15.00
+tokens_per_image = 1600
+output_tokens_per_image = 320
+
+[google]
+input_per_million_tokens = 0.30
+output_per_million_tokens = 2.50
+tokens_per_image = 1300
+output_tokens_per_image = 320
+
+[openai]
+input_per_million_tokens = 2.50
+output_per_million_tokens = 10.00
+tokens_per_image = 1450
+output_tokens_per_image = 320
+
+[openai_compatible]
+# Endpoints vary widely. Edit these to match whatever you are actually pointed
+# at, or leave them to inherit the pessimistic default above.
+input_per_million_tokens = 5.00
+output_per_million_tokens = 15.00
+tokens_per_image = 1600
+output_tokens_per_image = 320
+
+[ollama_local]
+# There is no provider charge for a model running on this computer. The
+# application displays "No provider API charge" rather than "$0.00", because a
+# local run still costs battery, memory, heat, and time.
+no_provider_charge = true

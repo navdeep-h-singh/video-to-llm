@@ -1,0 +1,254 @@
+#!/usr/bin/env python3
+"""Audit the repository for anything that must not be published.
+
+Run before making this repository public, and on every commit through the
+pre-commit hook. Exits non-zero on any finding.
+
+This is a *tracked-files* audit. It inspects what git would publish, not what
+happens to be sitting in the working tree — an ignored artifact directory full of
+someone's frames is fine, the same directory accidentally staged is not.
+
+Checked:
+
+1. No file whose extension marks it as a credential, a database, a log, source
+   media, or an image.
+2. No real configuration file where only a template belongs.
+3. No credential-shaped literal in any tracked text file.
+4. No absolute path into a user's home directory.
+5. No non-loopback bind address or Ollama endpoint.
+6. Every template that must exist does exist.
+7. `.gitignore` still covers each category the specification requires.
+"""
+
+from __future__ import annotations
+
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+
+# ── Rules ─────────────────────────────────────────────────────────────────
+
+FORBIDDEN_SUFFIXES = {
+    ".key",
+    ".pem",
+    ".p12",
+    ".pfx",
+    ".crt",
+    ".cer",
+    ".der",
+    ".keystore",
+    ".db",
+    ".sqlite",
+    ".sqlite3",
+    ".db-wal",
+    ".db-shm",
+    ".log",
+    ".mp4",
+    ".mov",
+    ".webm",
+    ".mkv",
+    ".avi",
+    ".m4v",
+    ".wav",
+    ".mp3",
+    ".m4a",
+    ".flac",
+    ".aac",
+    ".ogg",
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".gif",
+    ".bmp",
+    ".tiff",
+    ".webp",
+}
+
+FORBIDDEN_PATHS = {
+    ".env",
+    "config/settings.toml",
+    "config/pricing.toml",
+    "config/providers.toml",
+}
+
+REQUIRED_TEMPLATES = [
+    ".env.example",
+    "config/settings.example.toml",
+    "config/pricing.example.toml",
+    "config/providers.example.toml",
+    ".gitignore",
+    ".gitleaks.toml",
+]
+
+REQUIRED_IGNORE_PATTERNS = [
+    (".env", "environment file"),
+    ("*.key", "private keys"),
+    ("*.db", "database"),
+    ("*.log", "logs"),
+    ("models/", "model weights"),
+    ("*.mp4", "source media"),
+    ("*.jpg", "extracted images"),
+    ("collections/", "collection output"),
+    (".DS_Store", "OS files"),
+]
+
+SECRET_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("Anthropic key", re.compile(r"sk-ant-[A-Za-z0-9_\-]{20,}")),
+    ("OpenAI-style key", re.compile(r"\bsk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9]{32,}")),
+    ("Google API key", re.compile(r"\bAIza[A-Za-z0-9_\-]{35}")),
+    ("GitHub token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{36}")),
+    ("AWS access key", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
+    ("Slack token", re.compile(r"\bxox[abposr]-[A-Za-z0-9\-]{20,}")),
+    ("Private key block", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
+    ("Credentials in URL", re.compile(r"://[^:/@\s]+:[^@/\s]{6,}@")),
+]
+
+HOME_PATH = re.compile(r"(?:/Users/|/home/|C:\\Users\\)(?!runner\b)[A-Za-z0-9._\-]+[/\\]")
+
+NON_LOOPBACK_BIND = re.compile(
+    r"""(?ix)
+    (?: host \s* [:=] \s* ["']  0\.0\.0\.0  ["']
+      | \b uvicorn \b .* --host \s+ 0\.0\.0\.0
+      | ollama[_\-]?(?:endpoint|host|url) \s* [:=] \s* ["']?
+        https?://(?! 127\.0\.0\.1 | localhost | \[::1\] ) [^\s"']+
+    )
+    """
+)
+
+# Files exempt from a given class of check, with the reason.
+SECRET_SCAN_EXEMPT = {
+    "scripts/pre_publish_audit.py",  # contains the patterns themselves
+    ".gitleaks.toml",  # ditto
+    "app/core/redaction.py",  # ditto
+    "tests/unit/test_redaction.py",  # synthetic shapes, asserted synthetic
+    "docs/SECURITY.md",
+    "docs/SECURE_GITHUB_EXPORT.md",
+    "uv.lock",
+}
+
+HOME_PATH_EXEMPT = {
+    "scripts/pre_publish_audit.py",
+    ".gitleaks.toml",
+}
+
+BIND_SCAN_EXEMPT = {
+    "scripts/pre_publish_audit.py",
+    ".gitleaks.toml",
+}
+
+TEXT_SUFFIXES = {
+    ".py",
+    ".toml",
+    ".md",
+    ".txt",
+    ".yaml",
+    ".yml",
+    ".json",
+    ".cfg",
+    ".ini",
+    ".html",
+    ".css",
+    ".js",
+    ".sh",
+    ".ps1",
+    ".example",
+    "",
+}
+
+
+def tracked_files() -> list[str]:
+    result = subprocess.run(
+        ["git", "ls-files", "-z"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return [p for p in result.stdout.split("\0") if p]
+
+
+def is_text(path: str) -> bool:
+    return Path(path).suffix.lower() in TEXT_SUFFIXES
+
+
+def audit() -> list[str]:
+    findings: list[str] = []
+    files = tracked_files()
+
+    if not files:
+        return ["No tracked files found — is this a git repository with a commit?"]
+
+    # 1 & 2 — file identity
+    for path in files:
+        suffix = Path(path).suffix.lower()
+        if suffix in FORBIDDEN_SUFFIXES:
+            findings.append(f"{path}: tracked file has forbidden extension '{suffix}'")
+        if path in FORBIDDEN_PATHS:
+            findings.append(
+                f"{path}: real configuration file is tracked; only the template belongs here"
+            )
+
+    # 3, 4, 5 — content
+    for path in files:
+        if not is_text(path):
+            continue
+        try:
+            text = (REPO / path).read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+
+        if path not in SECRET_SCAN_EXEMPT:
+            for label, pattern in SECRET_PATTERNS:
+                match = pattern.search(text)
+                if match:
+                    line = text[: match.start()].count("\n") + 1
+                    findings.append(f"{path}:{line}: possible {label}")
+
+        if path not in HOME_PATH_EXEMPT:
+            match = HOME_PATH.search(text)
+            if match:
+                line = text[: match.start()].count("\n") + 1
+                findings.append(
+                    f"{path}:{line}: absolute path into a home directory ({match.group(0)!r})"
+                )
+
+        if path not in BIND_SCAN_EXEMPT:
+            match = NON_LOOPBACK_BIND.search(text)
+            if match:
+                line = text[: match.start()].count("\n") + 1
+                findings.append(f"{path}:{line}: non-loopback bind address or endpoint")
+
+    # 6 — templates present
+    for template in REQUIRED_TEMPLATES:
+        if not (REPO / template).exists():
+            findings.append(f"{template}: required template is missing")
+
+    # 7 — .gitignore coverage
+    gitignore = REPO / ".gitignore"
+    if gitignore.exists():
+        ignored = gitignore.read_text(encoding="utf-8")
+        for pattern, label in REQUIRED_IGNORE_PATTERNS:
+            if pattern not in ignored:
+                findings.append(f".gitignore: no rule covering {label} ('{pattern}')")
+
+    return findings
+
+
+def main() -> int:
+    findings = audit()
+    if findings:
+        print("Pre-publish audit FAILED\n", file=sys.stderr)
+        for finding in findings:
+            print(f"  ✗ {finding}", file=sys.stderr)
+        print(f"\n{len(findings)} finding(s). Resolve before publishing.", file=sys.stderr)
+        return 1
+
+    print(f"Pre-publish audit passed — {len(tracked_files())} tracked files, no findings.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

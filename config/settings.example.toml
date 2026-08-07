@@ -1,0 +1,72 @@
+# Copy to `config/settings.toml` and edit. The real file is git-ignored.
+# Every setting below is shown with its shipped default.
+
+[general]
+# Absolute path to the output root. Left empty here on purpose: the first-run
+# screen asks for it, and no path from any particular machine belongs in a
+# template that may be published.
+output_root = ""
+
+[server]
+# The bind host is fixed to the loopback interface in code and is not
+# configurable. There is no LAN mode.
+port = 8712
+
+[sampling]
+# One of: detailed (1s), balanced (2s), economy (3s), custom
+preset = "balanced"
+# Only read when preset = "custom". Range 0.5–10.0 in 0.5 steps.
+custom_interval_seconds = 2.0
+
+[transcription]
+# Backend resolver: auto | cpu | metal | cuda | vulkan
+# CPU always works and is the mandatory fallback on every platform.
+backend = "auto"
+# tiny | base | small | medium | large-v2 | large-v3
+model = "medium"
+# Stretches of quiet longer than this are marked in the transcript.
+silence_threshold_seconds = 3.0
+language = "auto"
+
+[visual_analysis]
+# Off by default. A local-only job never touches this section.
+enabled = false
+# none | ollama_local | anthropic | google | openai | openai_compatible
+provider = "none"
+# Free text. Never validated against a fixed catalogue.
+model_id = ""
+
+[visual_analysis.budget]
+# Applies to external providers only. Local Ollama has no provider charge and
+# is governed by the workload guard below instead.
+hard_limit_usd = 25.0
+# stop_and_ask | continue_locally
+on_limit = "stop_and_ask"
+
+[visual_analysis.local_guard]
+# Optional workload ceiling for local models, in place of a financial cap.
+max_runtime_minutes = 0        # 0 disables the guard
+max_frames_per_run = 0         # 0 disables the guard
+
+[ollama]
+# Loopback hosts only. Non-loopback endpoints are rejected outright.
+endpoint = "http://127.0.0.1:11434"
+# Default 1. 2 is permitted after a successful preflight. 3–4 require an
+# explicit advanced override and carry a memory and latency warning.
+batch_size = 1
+concurrency = 1
+# Set true only after reading the experimental warning in the UI.
+experimental_acknowledged = false
+
+[worker]
+# The worker is started manually and keeps running after the browser closes.
+poll_interval_seconds = 2
+max_retries = 3
+backoff_base_seconds = 5
+
+[collections]
+# Estimate only. Real provider tokenisation differs.
+default_token_limit = 200000
+default_reserve_tokens = 20000
+# Whole videos are kept together unless the user permits splitting per build.
+allow_video_split = false

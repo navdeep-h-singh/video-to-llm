@@ -1,0 +1,87 @@
+# Copy to `config/providers.toml` and edit. The real file is git-ignored.
+#
+# This file holds non-secret provider wiring only. It must never contain an API
+# key, a token, an account identifier, an organisation ID, or a private
+# endpoint. Keys live in the operating system's secure store, or — only where no
+# secure store exists — in the process environment. Nothing else.
+
+version = 1
+
+# ─── Local Ollama ─────────────────────────────────────────────────────────
+# Labelled "Local / Experimental" in the interface.
+[ollama_local]
+enabled = true
+label = "On this computer"
+# Loopback only. 127.0.0.1, localhost, and ::1 are the only accepted hosts;
+# anything else is rejected before a request is made.
+endpoint = "http://127.0.0.1:11434"
+# Free text. The suggestion below is a copyable starting point that has been
+# documented as a baseline, not an authoritative catalogue entry.
+suggested_model_id = "qwen2.5vl:7b"
+model_id = ""
+# 1 by default. 2 after a successful preflight. 3–4 only as an advanced
+# override, with a memory and latency warning.
+batch_size = 1
+concurrency = 1
+requires_api_key = false
+
+# ─── External providers ───────────────────────────────────────────────────
+# All disabled by default. Enabling one requires an explicit opt-in in the
+# interface, which explains what leaves this computer before anything is sent.
+
+[anthropic]
+enabled = false
+label = "Claude"
+env_var = "ANTHROPIC_API_KEY"
+keyring_service = "video-to-llm"
+keyring_account = "anthropic"
+suggested_model_id = "claude-sonnet-4-5"
+model_id = ""
+max_batch_frames = 20
+requires_api_key = true
+
+[google]
+enabled = false
+label = "Google Gemini"
+env_var = "GOOGLE_API_KEY"
+keyring_service = "video-to-llm"
+keyring_account = "google"
+suggested_model_id = "gemini-2.5-flash"
+model_id = ""
+max_batch_frames = 20
+requires_api_key = true
+
+[openai]
+enabled = false
+label = "OpenAI"
+env_var = "OPENAI_API_KEY"
+keyring_service = "video-to-llm"
+keyring_account = "openai"
+suggested_model_id = "gpt-4.1-mini"
+model_id = ""
+max_batch_frames = 20
+requires_api_key = true
+
+# Advanced. Point this at any endpoint that speaks the OpenAI chat-completions
+# shape. Leave base_url empty in this template — a real endpoint belongs in the
+# git-ignored copy, never here.
+[openai_compatible]
+enabled = false
+label = "Other service (advanced)"
+base_url = ""
+env_var = "OPENAI_COMPATIBLE_API_KEY"
+keyring_service = "video-to-llm"
+keyring_account = "openai_compatible"
+model_id = ""
+max_batch_frames = 20
+requires_api_key = true
+
+# ─── Fallback policy ──────────────────────────────────────────────────────
+[fallback]
+# Disabled by default. Fallbacks are never silent: when enabled they are
+# explicit, ordered, and surfaced in the review workspace and the provenance
+# record. There is never an automatic fall back from Local Ollama to a cloud
+# provider — that requires deliberate configuration and a review confirmation.
+enabled = false
+order = []
+allow_local_to_cloud = false

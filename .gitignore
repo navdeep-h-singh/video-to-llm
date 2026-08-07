@@ -1,0 +1,123 @@
+# ─── Secrets and credentials ──────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer
+*.der
+*.keystore
+credentials.*
+secrets.*
+config/settings.toml
+config/pricing.toml
+config/providers.toml
+.netrc
+.htpasswd
+
+# ─── Database and durable state ───────────────────────────────────────────
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+state/
+var/
+
+# ─── Logs and runtime ─────────────────────────────────────────────────────
+*.log
+logs/
+run/
+*.pid
+*.lock
+!uv.lock
+
+# ─── Models and caches ────────────────────────────────────────────────────
+models/
+*.bin
+*.gguf
+*.onnx
+*.ct2
+.cache/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# ─── Source media ─────────────────────────────────────────────────────────
+*.mp4
+*.mov
+*.webm
+*.mkv
+*.avi
+*.m4v
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.aac
+*.ogg
+
+# ─── Images ───────────────────────────────────────────────────────────────
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+*.tiff
+*.webp
+
+# ─── Processed output, exports, collections ───────────────────────────────
+output/
+outputs/
+processed/
+exports/
+export/
+collections/
+analysis_input/
+frames/
+frames_api/
+assembled.txt
+master_assembled.txt
+collection_assembled.txt
+*_manifest.json
+provenance.json
+transcript.json
+silence_windows.json
+
+# ─── Local scratch and design working files ───────────────────────────────
+scratch/
+tmp/
+design_reference/
+
+# ─── OS ───────────────────────────────────────────────────────────────────
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+desktop.ini
+$RECYCLE.BIN/
+
+# ─── Editors ──────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# ─── Test fixtures are generated, never committed ─────────────────────────
+tests/fixtures/generated/

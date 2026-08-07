@@ -1,0 +1,53 @@
+title = "video-to-llm secret scan"
+
+[extend]
+useDefault = true
+
+# ── Additional rules ──────────────────────────────────────────────────────
+
+[[rules]]
+id = "generic-provider-key-assignment"
+description = "API key, token, or secret assigned a literal value"
+regex = '''(?i)\b[a-z0-9_\-]*(api[_\-]?key|secret|token|password|credential)[a-z0-9_\-]*\s*[:=]\s*["']?[A-Za-z0-9_\-]{20,}["']?'''
+tags = ["key", "generic"]
+
+[[rules]]
+id = "non-loopback-ollama-endpoint"
+description = "Ollama endpoint pointing somewhere other than the loopback interface"
+regex = '''(?i)ollama[_\-]?(endpoint|host|url)\s*[:=]\s*["']?https?://(?!127\.0\.0\.1|localhost|\[::1\])[^\s"']+'''
+tags = ["config", "localhost-only"]
+
+[[rules]]
+id = "absolute-home-path"
+description = "Absolute path into a user's home directory"
+regex = '''(/Users/|/home/|C:\\Users\\)[A-Za-z0-9._\-]+/'''
+tags = ["privacy"]
+
+# ── Allowlist ─────────────────────────────────────────────────────────────
+
+[allowlist]
+description = "Paths and literals that are safe by construction"
+
+paths = [
+    '''\.gitleaks\.toml$''',
+    '''(^|/)uv\.lock$''',
+    # Test fixtures are synthetic by policy and asserted as such by the
+    # repository hygiene test.
+    '''^tests/''',
+    # Documentation shows key *shapes* when explaining what is redacted.
+    '''^docs/SECURITY\.md$''',
+    '''^docs/SECURE_GITHUB_EXPORT\.md$''',
+    # The design export is a local working reference and is git-ignored.
+    '''^design_reference/''',
+]
+
+regexes = [
+    # Placeholder values in the safe templates: the whole point of those files.
+    '''(?i)(api[_\-]?key|secret|token|password)\s*[:=]\s*["']?\s*$''',
+    '''(?i)env_var\s*=\s*["'][A-Z_]+["']''',
+    '''(?i)keyring_(service|account)\s*=''',
+    # Runs of a single repeated character are placeholder shapes, never values.
+    '''([A-Za-z0-9])\1{15,}''',
+    # The documented loopback default.
+    '''http://127\.0\.0\.1:11434''',
+]
