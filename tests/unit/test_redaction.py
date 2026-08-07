@@ -278,3 +278,97 @@ def test_exception_text_helper_masks_the_message():
     out = redacted_exception_text(exc)
     assert "registered-key-value-abcdef" not in out
     assert "ValueError" in out
+
+
+# ── Key matching must not swallow ordinary data ───────────────────────────
+#
+# The first version of this matched key names by bare substring, so "token"
+# matched `token_limit` and every token *count* this application writes into a
+# manifest came out as "[redacted]". Masking ordinary data is not a safe
+# failure — it silently corrupts output while protecting nothing.
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "token_limit",
+        "reserve_tokens",
+        "total_tokens_estimate",
+        "input_tokens",
+        "output_tokens",
+        "token_method",
+        "token_method_version",
+        "tokens_per_image",
+        "output_tokens_per_image",
+        "author",
+        "authored_at",
+        "keyring_service",
+        "keyring_account",
+        "monkey",
+        "secretariat_notes",
+    ],
+)
+def test_ordinary_keys_that_merely_contain_a_sensitive_word_survive(key):
+    out = redact_structure({key: 12345})
+    assert out[key] == 12345, f"{key} was masked but holds ordinary data"
+
+
+def test_password_style_keys_stay_broadly_matched():
+    """The asymmetry with `token` is deliberate.
+
+    `token` had to be narrowed because token *counts* are everywhere in this
+    application's manifests, so a false positive corrupts real output. Nothing
+    here has a field like `passwords_enabled_count`, so leaving `password`
+    broadly matched costs nothing and keeps the safer default.
+    """
+    assert redact_structure({"passwords_enabled_count": 3})["passwords_enabled_count"] == MASK
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "api_key",
+        "apiKey",
+        "api-key",
+        "secret",
+        "client_secret",
+        "password",
+        "user_password",
+        "credential",
+        "authorization",
+        "auth_token",
+        "access_token",
+        "refresh_token",
+        "id_token",
+        "bearer_token",
+        "session_token",
+        "private_key",
+        "access_key",
+        "session_id",
+        "cookie",
+        "token",
+        "x-api-key",
+    ],
+)
+def test_credential_keys_are_still_masked(key):
+    assert redact_structure({key: "some-value-here"})[key] == MASK
+
+
+def test_a_manifest_of_token_counts_round_trips_intact():
+    # Exactly the shape a collection pack manifest has.
+    manifest = {
+        "token_limit": 200_000,
+        "reserve_tokens": 20_000,
+        "usable_budget": 180_000,
+        "token_method": "characters/3.6",
+        "token_method_version": 1,
+        "packs": [{"number": 1, "token_estimate": 171_200}],
+    }
+    assert redact_structure(manifest) == manifest
+
+
+def test_a_manifest_still_loses_a_real_credential():
+    payload = {"token_limit": 200_000, "api_key": "should-not-survive"}
+    out = redact_structure(payload)
+    assert out["token_limit"] == 200_000
+    assert out["api_key"] == MASK

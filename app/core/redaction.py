@@ -132,10 +132,56 @@ _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
 )
 
 # Mapping keys whose value is always masked, whatever it looks like.
+#
+# Matching is anchored to name *segments* rather than being a bare substring
+# search. An unanchored "token" also matches `token_limit`, `input_tokens`, and
+# `total_tokens_estimate` — all ordinary counts this application writes into
+# manifests — and masking those would silently corrupt the output rather than
+# protect anything. Likewise unanchored "auth" matches "author".
+#
+# Bare `token` is deliberately absent from this pattern and handled by
+# _EXACT_SENSITIVE_KEYS instead, so a field named exactly "token" is masked
+# while "token_limit" is not. Real credentials are still caught by their shape
+# and by the registered-value pass, so nothing depends on the key name alone.
 _SENSITIVE_KEY_RE = re.compile(
-    r"(?i)(api[-_]?key|apikey|secret|token|password|passwd|credential|authorization|"
-    r"auth|bearer|private[-_]?key|access[-_]?key|session[-_]?id|cookie)"
+    r"""(?ix)
+    (?: ^ | [_\-.] )
+    (?:
+        api [_\-]? keys?
+      | apikeys?
+      | secrets?
+      | secret [_\-]? keys?
+      | passwords?
+      | passwd
+      | credentials?
+      | authorization
+      | auth [_\-]? (?: token | key | header )
+      | access [_\-]? tokens?
+      | refresh [_\-]? tokens?
+      | id [_\-]? tokens?
+      | api [_\-]? tokens?
+      | bearer [_\-]? tokens?
+      | session [_\-]? tokens?
+      | private [_\-]? keys?
+      | access [_\-]? keys?
+      | session [_\-]? ids?
+      | cookies?
+    )
+    (?: $ | [_\-.] )
+    """
 )
+
+#: Keys that are sensitive only when they are the *whole* name. "token" alone is
+#: almost certainly a credential; "token_limit" is a number.
+_EXACT_SENSITIVE_KEYS = frozenset(
+    {"token", "auth", "key", "secret", "password", "credential", "cookie", "bearer"}
+)
+
+
+def is_sensitive_key(name: str) -> bool:
+    """True when a mapping key names a credential rather than ordinary data."""
+    lowered = name.strip().lower()
+    return lowered in _EXACT_SENSITIVE_KEYS or bool(_SENSITIVE_KEY_RE.search(lowered))
 
 
 def redact(value: Any) -> Any:
@@ -172,7 +218,7 @@ def redact_structure(value: Any, _depth: int = 0) -> Any:
     if isinstance(value, Mapping):
         out: dict[Any, Any] = {}
         for key, item in value.items():
-            if isinstance(key, str) and _SENSITIVE_KEY_RE.search(key):
+            if isinstance(key, str) and is_sensitive_key(key):
                 out[key] = MASK if item is not None else None
             else:
                 out[key] = redact_structure(item, _depth + 1)
