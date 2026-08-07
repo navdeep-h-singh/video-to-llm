@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% from "_macros.html" import status, empty %}
+{% block title %}Earlier work — Video to LLM{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Work brought in from before</h1>
+    <p class="page-sub">Already-processed videos you can use in a collection without doing them again.</p>
+  </div>
+</div>
+
+<div class="panel">
+  {% if imports %}
+  <table class="table">
+    <caption class="visually-hidden">Imported videos</caption>
+    <thead><tr><th scope="col">Video</th><th scope="col">Version</th><th scope="col">State</th>
+               <th scope="col">Brought in</th></tr></thead>
+    <tbody>
+      {% for row in imports %}
+      <tr>
+        <td>{{ row.name }}</td>
+        <td class="mono">v{{ row.version }}</td>
+        <td>{{ status(row.status) }}</td>
+        <td class="text-muted">{{ row.when }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    {{ empty("Nothing brought in yet.",
+             "Run: video-to-llm import <folder> to bring in output from an earlier run.") }}
+  {% endif %}
+</div>
+{% endblock %}

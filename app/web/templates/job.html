@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% from "_macros.html" import status, bar %}
+{% block title %}{{ job.name }} — Video to LLM{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ job.name }}</h1>
+    <p class="page-sub">{{ videos|length }} video{{ '' if videos|length == 1 else 's' }}</p>
+  </div>
+  <div class="actions">
+    {{ status(job_status) }}
+    <a class="btn btn-secondary" href="/jobs/{{ job.id }}/review">Review</a>
+    <a class="btn btn-secondary" href="/jobs/{{ job.id }}/outputs">Files</a>
+  </div>
+</div>
+
+<div class="panel">
+  {% for video in videos %}
+  <div style="padding:var(--space-3) 0;border-bottom:1px solid var(--color-divider)">
+    <div style="display:flex;align-items:baseline;gap:var(--space-3)">
+      <span class="mono text-muted">{{ video.number }}</span>
+      <h5 style="margin:0">{{ video.name }}</h5>
+      <span class="text-muted" style="font-size:13px">
+        {{ video.length }}{% if video.frames %} · {{ "{:,}".format(video.frames) }} pictures{% endif %}
+      </span>
+      <span style="margin-left:auto">{{ status(video.status) }}</span>
+    </div>
+    <div class="grid grid-4" style="margin-top:var(--space-2)">
+      {% for stage in video.stages %}
+      <div>
+        <div style="display:flex;justify-content:space-between;font-size:12px">
+          <span>{{ stage.label }}</span>
+          <span class="text-muted">{{ stage.detail }}</span>
+        </div>
+        {{ bar(stage.percent, accent=(stage.percent > 0 and stage.percent < 100)) }}
+      </div>
+      {% endfor %}
+    </div>
+    {% if video.error %}
+      <p class="note" style="margin-top:var(--space-2)">{{ video.error }}</p>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+<div class="panel">
+  <div class="panel-head"><h4 style="margin:0">What has happened</h4></div>
+  {% if events %}
+  <ul class="timeline">
+    {% for event in events %}
+    <li>
+      <time class="mono">{{ event.time }}</time>
+      <span{% if event.level != 'info' %} style="color:var(--color-accent-800)"{% endif %}>{{ event.text }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+    <p class="text-muted">Nothing recorded yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

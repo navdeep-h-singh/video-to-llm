@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% from "_macros.html" import empty %}
+{% block title %}Review — Video to LLM{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Review</h1>
+    <p class="page-sub">Check anything marked low confidence before you rely on it.</p>
+  </div>
+  <div class="actions"><a class="btn btn-secondary" href="/jobs/{{ job_id }}">Back to the job</a></div>
+</div>
+
+{% if videos %}
+<div class="panel">
+  <div class="seg" role="group" aria-label="Which picture to show">
+    <label class="seg-opt"><input type="radio" name="frameview" value="clean" checked>Clean picture</label>
+    <label class="seg-opt"><input type="radio" name="frameview" value="numbered">Numbered copy</label>
+  </div>
+  <p class="text-muted" style="font-size:13px;margin-top:var(--space-2)">
+    The clean picture is exactly as it was captured — the one that ends up in your
+    exports. The numbered copy is what gets sent to a description model, so answers
+    can be matched back to the right moment.
+  </p>
+</div>
+
+<div class="panel">
+  <table class="table">
+    <caption class="visually-hidden">Videos in this job</caption>
+    <thead><tr><th scope="col">Video</th><th scope="col">Pictures</th><th scope="col">State</th></tr></thead>
+    <tbody>
+      {% for video in videos %}
+      <tr>
+        <td>{{ video["display_name"] }}</td>
+        <td class="mono">{{ "{:,}".format(video["frame_count"] or 0) }}</td>
+        <td>{{ status.present(video["status"]).label }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+  {{ empty("There is nothing to review yet.", "Pictures and descriptions appear here once a job has run.") }}
+{% endif %}
+{% endblock %}

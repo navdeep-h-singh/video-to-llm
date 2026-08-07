@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% from "_macros.html" import empty %}
+{% block title %}New collection — Video to LLM{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>New collection</h1>
+    <p class="page-sub">Nothing is processed again. This reuses work you have already done.</p>
+  </div>
+</div>
+
+<ol class="panel" style="display:flex;gap:var(--space-4);list-style:none;margin:0;padding:var(--space-3)">
+  {% for label in ["Choose videos", "Set the order", "Choose versions", "Choose the shape", "Check and build"] %}
+  <li style="display:flex;align-items:center;gap:var(--space-2);font-size:13px">
+    <span class="mono text-muted">{{ loop.index }}</span>
+    <span>{{ label }}</span>
+  </li>
+  {% endfor %}
+</ol>
+
+<form class="panel" method="post" action="/collections">
+  <div class="field">
+    <label for="collection-name">What is this collection called?</label>
+    <input class="input" id="collection-name" name="name" required placeholder="Model handoff — week 6">
+  </div>
+
+  <h4 style="margin-top:var(--space-6)">Which videos?</h4>
+  {% if sources %}
+  <table class="table">
+    <caption class="visually-hidden">Videos available to include</caption>
+    <thead><tr><th scope="col"><span class="visually-hidden">Include</span></th>
+               <th scope="col">Video</th><th scope="col">Length</th>
+               <th scope="col">Version</th><th scope="col">Worth knowing</th></tr></thead>
+    <tbody>
+      {% for source in sources %}
+      <tr>
+        <td><input type="checkbox" name="video" value="{{ source.job_video_id }}"
+                   aria-label="Include {{ source.display_name }}"></td>
+        <td>{{ source.display_name }}</td>
+        <td class="mono">{{ status.format_duration(source.duration_seconds) }}</td>
+        <td class="mono">v{{ source.source_version }}</td>
+        <td>
+          {% if source.has_warning %}
+            <span class="tag tag-accent">{{ source.warning_label }}</span>
+          {% else %}
+            <span class="tag tag-neutral">Ready</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="text-muted" style="font-size:12px;margin-top:var(--space-2)">
+    Anything marked can still be included — you are just told what is imperfect
+    about it first.
+  </p>
+  {% else %}
+    {{ empty("No processed videos yet.", "Run a job first, or bring in earlier work.") }}
+  {% endif %}
+
+  <fieldset style="border:0;padding:0;margin:var(--space-6) 0 0">
+    <legend><h4>What shape should the result be?</h4></legend>
+    <div class="grid grid-2" style="margin-top:var(--space-2)">
+      <label class="pick" style="cursor:pointer">
+        <input type="radio" name="mode" value="full" checked
+               style="position:absolute;opacity:0;width:0;height:0">
+        <span class="pick-title">One long document</span>
+        <span class="pick-body">Every video, one after another, in your order — with clear
+          markers where each one starts and ends.</span>
+        <span class="pick-body mono text-muted" style="display:block;margin-top:var(--space-2)">collection_assembled.txt</span>
+      </label>
+      <label class="pick" style="cursor:pointer">
+        <input type="radio" name="mode" value="packs"
+               style="position:absolute;opacity:0;width:0;height:0">
+        <span class="pick-title">Split into parts that fit</span>
+        <span class="pick-body">Same content, cut into numbered parts small enough to paste
+          into a model in one go.</span>
+        <span class="pick-body mono text-muted" style="display:block;margin-top:var(--space-2)">collection-pack-001.md, -002.md, …</span>
+      </label>
+    </div>
+  </fieldset>
+
+  <div class="grid grid-3" style="margin-top:var(--space-4)">
+    <div class="field">
+      <label for="token-limit">How much fits in one go?</label>
+      <input class="input mono" id="token-limit" name="token_limit" type="number"
+             value="{{ settings.collections.default_token_limit }}" min="1000" step="1000">
+    </div>
+    <div class="field">
+      <label for="reserve">Hold back for your prompt and the reply</label>
+      <input class="input mono" id="reserve" name="reserve_tokens" type="number"
+             value="{{ settings.collections.default_reserve_tokens }}" min="0" step="1000">
+    </div>
+    <div class="field">
+      <label for="model-label">Which model is this for? (optional)</label>
+      <input class="input" id="model-label" name="target_model_label" placeholder="free text">
+    </div>
+  </div>
+
+  <label class="radio" style="margin-top:var(--space-3)">
+    <input type="checkbox" name="allow_video_split">
+    <span class="dot" aria-hidden="true"></span>
+    <span>Allow a very long video to be cut across parts</span>
+  </label>
+  <p class="text-muted" style="font-size:12px;margin-top:var(--space-1)">
+    Off by default. Cuts land on a natural break, never mid-sentence, and each
+    part repeats a little of the one before so the thread is not lost.
+  </p>
+
+  <div style="margin-top:var(--space-6);display:flex;gap:var(--space-2)">
+    <button class="btn btn-primary" type="submit">Build collection</button>
+    <a class="btn btn-secondary" href="/collections">Cancel</a>
+  </div>
+  <p class="text-muted" style="font-size:12px;margin-top:var(--space-2)">
+    Building is free, happens on this computer, and takes seconds. Nothing is
+    processed again and nothing is sent anywhere.
+  </p>
+</form>
+{% endblock %}

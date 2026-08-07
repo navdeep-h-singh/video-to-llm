@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% from "_macros.html" import empty %}
+{% block title %}{{ collection.name }} — Video to LLM{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>{{ collection.name }}</h1>
+    <p class="page-sub">
+      {{ collection.sources|length }} video{{ '' if collection.sources|length == 1 else 's' }}
+      · {{ status.format_duration(collection.total_duration_seconds) }}
+      · {{ "split into parts" if collection.mode == "packs" else "one document" }}
+    </p>
+  </div>
+  <div class="actions"><a class="btn btn-secondary" href="/collections">All collections</a></div>
+</div>
+
+<div class="panel">
+  <div class="panel-head"><h4 style="margin:0">The videos, in order</h4></div>
+  <table class="table">
+    <caption class="visually-hidden">Videos in this collection</caption>
+    <thead><tr><th scope="col">#</th><th scope="col">Video</th><th scope="col">Length</th>
+               <th scope="col">Version used</th><th scope="col">Worth knowing</th></tr></thead>
+    <tbody>
+      {% for source in collection.sources %}
+      <tr>
+        <td class="mono">{{ loop.index }}</td>
+        <td>{{ source.display_name }}</td>
+        <td class="mono">{{ status.format_duration(source.duration_seconds) }}</td>
+        <td class="mono">v{{ source.source_version }}</td>
+        <td>
+          {% if source.has_warning %}
+            <span class="tag tag-accent">{{ source.warning_label }}</span>
+            <span class="text-muted" style="font-size:12px">{{ source.warning_detail }}</span>
+          {% else %}
+            <span class="tag tag-neutral">Ready</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="text-muted" style="font-size:12px;margin-top:var(--space-2)">
+    Each video is pinned to the exact version of its output that existed when this
+    collection was made. Processing a video again later creates a new version and
+    leaves this collection unchanged.
+  </p>
+</div>
+
+<div class="panel">
+  <div class="panel-head"><h4 style="margin:0">Builds</h4></div>
+  {% if builds %}
+  <table class="table">
+    <caption class="visually-hidden">Every build of this collection</caption>
+    <thead><tr><th scope="col">Version</th><th scope="col">Shape</th><th scope="col">Parts</th>
+               <th scope="col">Size</th><th scope="col">Built</th></tr></thead>
+    <tbody>
+      {% for build in builds %}
+      <tr>
+        <td class="mono">v{{ build["collection_version"] }}</td>
+        <td>{{ "Split into parts" if build["mode"] == "packs" else "One document" }}</td>
+        <td class="mono">{{ build["pack_count"] or "—" }}</td>
+        <td class="mono">about {{ "{:,}".format(build["total_tokens_est"] or 0) }} tokens</td>
+        <td class="text-muted">{{ status.format_relative(build["completed_at"]) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="text-muted" style="font-size:12px;margin-top:var(--space-2)">
+    Sizes are estimates. The exact count depends on the model you use.
+  </p>
+  {% else %}
+    {{ empty("Not built yet.", "Building is free and takes seconds.") }}
+  {% endif %}
+</div>
+{% endblock %}

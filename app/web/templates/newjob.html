@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}New job — Video to LLM{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Start a new job</h1>
+    <p class="page-sub">Your videos stay where they are. Nothing is copied or moved.</p>
+  </div>
+</div>
+
+<form class="panel" method="post" action="/jobs">
+  <div class="field">
+    <label for="job-name">What is this job called?</label>
+    <input class="input" id="job-name" name="name" placeholder="Session review — 14 Feb" required>
+  </div>
+
+  <div class="field" style="margin-top:var(--space-4)">
+    <label for="job-paths">Which videos? One full path per line, up to twenty.</label>
+    <textarea class="input" id="job-paths" name="paths" rows="6"
+      aria-describedby="paths-help"
+      placeholder="/path/to/capture_0914.mp4&#10;/path/to/screen_1145.mov"></textarea>
+    <p id="paths-help" class="text-muted" style="font-size:12px;margin-top:var(--space-1)">
+      .mp4, .mov and .webm. They are read where they are and never changed.
+      The order you list them in is the order they are processed.
+    </p>
+  </div>
+
+  <fieldset style="border:0;padding:0;margin:var(--space-6) 0 0">
+    <legend><h4>How often should a picture be taken?</h4></legend>
+    <div class="grid grid-4" style="margin-top:var(--space-2)">
+      {% for value, title, body in [
+          ('1000', 'Close look', 'A picture every second'),
+          ('2000', 'Balanced', 'A picture every 2 seconds'),
+          ('3000', 'Light', 'A picture every 3 seconds'),
+          ('custom', 'Custom…', 'Anywhere from ½ to 10 seconds')] %}
+      <label class="pick" style="cursor:pointer">
+        <input type="radio" name="interval" value="{{ value }}"
+               {% if value == '2000' %}checked{% endif %}
+               style="position:absolute;opacity:0;width:0;height:0">
+        <span class="pick-title">{{ title }}</span>
+        <span class="pick-body">{{ body }}</span>
+      </label>
+      {% endfor %}
+    </div>
+  </fieldset>
+
+  <fieldset style="border:0;padding:0;margin:var(--space-6) 0 0">
+    <legend><h4>Should the pictures be described?</h4></legend>
+    <div class="grid grid-3" style="margin-top:var(--space-2)">
+      {% for value, title, body, cost in [
+          ('ollama_local', 'On this computer',
+           'Uses a model you installed yourself. Frames never leave this machine.',
+           'No provider API charge · uses your battery and time'),
+          ('external', 'Send to a service',
+           'Sends the numbered still pictures — never the video — to a service you have an account with.',
+           'Costs money · you set the cap'),
+          ('none', 'Skip descriptions',
+           'Pictures and spoken words only. Nothing leaves this computer.',
+           'No charge · fastest')] %}
+      <label class="pick" style="cursor:pointer">
+        <input type="radio" name="provider" value="{{ value }}"
+               {% if value == 'none' %}checked{% endif %}
+               style="position:absolute;opacity:0;width:0;height:0">
+        <span class="pick-title">{{ title }}</span>
+        <span class="pick-body">{{ body }}</span>
+        <span class="pick-body text-muted" style="margin-top:var(--space-2);display:block">{{ cost }}</span>
+      </label>
+      {% endfor %}
+    </div>
+    <p class="note note-neutral" style="margin-top:var(--space-3)">
+      Descriptions are optional. A job without them still produces pictures and a
+      transcript with the timeline preserved, and you can add descriptions later
+      without redoing any of this.
+    </p>
+  </fieldset>
+
+  <div style="margin-top:var(--space-6);display:flex;gap:var(--space-2)">
+    <button class="btn btn-primary" type="submit">Check and continue</button>
+    <a class="btn btn-secondary" href="/">Cancel</a>
+  </div>
+</form>
+{% endblock %}

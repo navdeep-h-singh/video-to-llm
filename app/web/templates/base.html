@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Video to LLM{% endblock %}</title>
+  <link rel="stylesheet" href="/static/tokens.css">
+  {# No external stylesheet, font service, or script. The badge in the header
+     promises nothing is uploaded; a CDN request would contradict it. #}
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to the main content</a>
+
+<div class="app">
+  <header class="topbar">
+    <div class="brand">VIDEO&nbsp;&rarr;&nbsp;LLM</div>
+
+    <div class="localbadge">
+      <span class="square" aria-hidden="true"></span>
+      <span>Runs only on this computer &mdash; nothing is uploaded</span>
+    </div>
+
+    <div class="topbar-right">
+      <span class="status {{ worker.css_class }}">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span>Background processing: <strong>{{ worker.label }}</strong></span>
+      </span>
+      <span class="mono text-muted">{{ disk_label }}</span>
+    </div>
+  </header>
+
+  <div class="shell">
+    <nav class="sidebar" aria-label="Sections">
+      {% for group in nav_groups %}
+        <div class="navgroup">
+          <h6>{{ group.title }}</h6>
+          {% for item in group.items %}
+            <a class="navlink" href="{{ item.href }}"
+               {% if item.current %}aria-current="page"{% endif %}>
+              <span>{{ item.label }}</span>
+              {% if item.count %}<span class="navcount">{{ item.count }}</span>{% endif %}
+            </a>
+          {% endfor %}
+        </div>
+      {% endfor %}
+    </nav>
+
+    <main class="main" id="main">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+
+{% block scripts %}{% endblock %}
+</body>
+</html>

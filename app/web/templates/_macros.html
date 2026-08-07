@@ -1,0 +1,33 @@
+{# Shared fragments. Status is always text + shape + colour, never colour alone. #}
+
+{% macro status(presentation) %}
+<span class="status {{ presentation.css_class }}">
+  <span class="status-dot" aria-hidden="true"></span>
+  <span>{{ presentation.label }}</span>
+  <span class="visually-hidden"> ({{ presentation.shape }})</span>
+</span>
+{% endmacro %}
+
+{% macro bar(percent, accent=false) %}
+<div class="bar {% if accent %}bar-accent{% endif %}"
+     role="progressbar" aria-valuenow="{{ percent }}" aria-valuemin="0" aria-valuemax="100">
+  <span style="width: {{ percent }}%"></span>
+</div>
+{% endmacro %}
+
+{% macro page_head(title, subtitle=None) %}
+<div class="page-head">
+  <div>
+    <h1>{{ title }}</h1>
+    {% if subtitle %}<p class="page-sub">{{ subtitle }}</p>{% endif %}
+  </div>
+  <div class="actions">{{ caller() if caller is defined else "" }}</div>
+</div>
+{% endmacro %}
+
+{% macro empty(message, hint=None) %}
+<div class="empty">
+  <p>{{ message }}</p>
+  {% if hint %}<p class="text-muted">{{ hint }}</p>{% endif %}
+</div>
+{% endmacro %}

@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Settings & checks — Video to LLM{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Settings &amp; checks</h1>
+    <p class="page-sub">How this computer is set up, and what is working.</p>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head"><h4 style="margin:0">This computer</h4></div>
+  <table class="table">
+    <caption class="visually-hidden">Readiness checks</caption>
+    <tbody>
+      {% for check in report.checks %}
+      <tr>
+        <td>{{ check.title }}</td>
+        <td>{{ check.detail }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="panel">
+  <div class="panel-head">
+    <h4 style="margin:0">Describing what is on screen</h4>
+    <span class="tag tag-neutral">Optional</span>
+  </div>
+  <p style="font-size:14px">
+    Off unless you turn it on. A job without descriptions still produces pictures
+    and a transcript, and you can add descriptions later without redoing anything.
+  </p>
+
+  <h5 style="margin-top:var(--space-4)">On this computer</h5>
+  <p style="font-size:14px;margin:0">
+    Frames stay on this device. No provider API charge. Local compute, battery,
+    heat, memory use, and processing time apply.
+  </p>
+  <p class="note" style="margin-top:var(--space-2)">
+    Local models may be less reliable for tiny text, dense labels, exact values,
+    and strict structured extraction. Review low-confidence results.
+  </p>
+  <dl style="display:grid;grid-template-columns:auto 1fr;gap:var(--space-1) var(--space-4);
+             font-size:13px;margin-top:var(--space-3)">
+    <dt class="text-muted">Where</dt><dd class="mono" style="margin:0">{{ settings.ollama.endpoint }}</dd>
+    <dt class="text-muted">Model</dt><dd class="mono" style="margin:0">{{ settings.visual_analysis.model_id or "not chosen" }}</dd>
+    <dt class="text-muted">Pictures at once</dt><dd style="margin:0">{{ settings.ollama.batch_size }}</dd>
+  </dl>
+  <p class="text-muted" style="font-size:12px;margin-top:var(--space-2)">
+    Only a model running on this computer is accepted. This version will not talk
+    to one anywhere else.
+  </p>
+  <a class="btn btn-secondary" style="margin-top:var(--space-2);align-self:flex-start"
+     href="/settings">Check local model</a>
+
+  <h5 style="margin-top:var(--space-6)">Services you have an account with</h5>
+  <p style="font-size:14px;margin:0">
+    Only the numbered still pictures are sent — never your video and never its
+    audio. You see what will be sent and roughly what it costs before anything
+    leaves this computer, and sending stops at your cap.
+  </p>
+  <table class="table" style="margin-top:var(--space-3)">
+    <caption class="visually-hidden">API keys</caption>
+    <thead><tr><th scope="col">Service</th><th scope="col">Key</th><th scope="col">Where it is kept</th></tr></thead>
+    <tbody>
+      {% for entry in credentials %}
+      <tr>
+        <td>{{ entry.provider }}</td>
+        <td>
+          {# Presence only. A stored key is never shown back, not even partly. #}
+          {% if entry.status.present %}
+            <span class="tag tag-neutral">Set</span>
+          {% else %}
+            <span class="text-muted">Not set</span>
+          {% endif %}
+        </td>
+        <td class="text-muted" style="font-size:13px">{{ entry.status.detail }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="text-muted" style="font-size:12px;margin-top:var(--space-2)">
+    Keys live in this computer's secure store, or in the environment for this
+    session only. They are never written to a file, never shown back, and never
+    included in any output or collection.
+  </p>
+</div>
+
+<div class="panel">
+  <div class="panel-head"><h4 style="margin:0">Where things are kept</h4></div>
+  <dl style="display:grid;grid-template-columns:auto 1fr;gap:var(--space-1) var(--space-4);font-size:14px">
+    <dt class="text-muted">Output folder</dt>
+    <dd class="mono" style="margin:0">{{ settings.output_root or "not chosen yet" }}</dd>
+    <dt class="text-muted">Reachable at</dt>
+    <dd class="mono" style="margin:0">{{ settings.base_url }}</dd>
+    <dt class="text-muted">Speech to text</dt>
+    <dd style="margin:0">{{ settings.transcription.model }} on your processor</dd>
+  </dl>
+</div>
+{% endblock %}

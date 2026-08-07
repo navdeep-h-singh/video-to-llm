@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% from "_macros.html" import status, bar, empty %}
+{% block title %}Dashboard — Video to LLM{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Your videos</h1>
+    <p class="page-sub">Jobs keep running when you close this window.</p>
+  </div>
+  <div class="actions"><a class="btn btn-primary" href="/jobs/new">New job</a></div>
+</div>
+
+{% if active %}
+<div class="panel" style="border-left:3px solid var(--color-accent)">
+  <div class="panel-head">
+    <h4 style="margin:0">{{ active.name }}</h4>
+    {{ status(active.status) }}
+    <span class="text-muted" style="margin-left:auto;font-size:13px">updated {{ active.updated }}</span>
+  </div>
+  <p class="text-muted" style="font-size:13px;margin:0">
+    {{ active.videos }} video{{ '' if active.videos == 1 else 's' }} · {{ active.length }}
+  </p>
+  <a class="btn btn-secondary" style="margin-top:var(--space-3);align-self:flex-start"
+     href="/jobs/{{ active.id }}">Open</a>
+</div>
+{% endif %}
+
+<div class="panel" style="margin-top:var(--space-4)">
+  {% if jobs %}
+  <table class="table">
+    <caption class="visually-hidden">Every job, most recently updated first</caption>
+    <thead>
+      <tr><th scope="col">Job</th><th scope="col">Videos</th><th scope="col">Length</th>
+          <th scope="col">State</th><th scope="col">Updated</th><th scope="col"></th></tr>
+    </thead>
+    <tbody>
+      {% for job in jobs %}
+      <tr>
+        <td><a href="/jobs/{{ job.id }}">{{ job.name }}</a></td>
+        <td class="mono">{{ job.videos }}</td>
+        <td class="mono">{{ job.length }}</td>
+        <td>{{ status(job.status) }}</td>
+        <td class="text-muted">{{ job.updated }}</td>
+        <td><a class="btn btn-ghost" href="/jobs/{{ job.id }}">Open</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    {{ empty("No jobs yet.", "Start one and it will keep working in the background.") }}
+  {% endif %}
+</div>
+{% endblock %}

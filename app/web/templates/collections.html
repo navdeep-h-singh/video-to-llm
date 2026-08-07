@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% from "_macros.html" import empty %}
+{% block title %}Collections — Video to LLM{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Collections</h1>
+    <p class="page-sub">Videos you have already processed, put in an order you choose.</p>
+  </div>
+  <div class="actions"><a class="btn btn-primary" href="/collections/new">New collection</a></div>
+</div>
+
+{% if collections %}
+<div class="grid grid-2">
+  {% for collection in collections %}
+  <a class="card" href="/collections/{{ collection.id }}" style="text-decoration:none;color:inherit">
+    <span class="card-kicker">{{ "Split into parts" if collection.mode == "packs" else "One document" }}</span>
+    <span class="card-title">{{ collection.name }}</span>
+    <p class="card-body">
+      {{ collection.sources|length }} video{{ '' if collection.sources|length == 1 else 's' }}
+      · {{ status.format_duration(collection.total_duration_seconds) }}
+    </p>
+    <span class="card-meta">
+      {% if collection.current_version %}built · version {{ collection.current_version }}{% else %}not built yet{% endif %}
+      {% if collection.warning_count %} · {{ collection.warning_count }} thing(s) to know{% endif %}
+    </span>
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<div class="panel">
+  {{ empty("No collections yet.",
+           "A collection puts already-processed videos in an order you choose. Building one is free and takes seconds.") }}
+</div>
+{% endif %}
+{% endblock %}

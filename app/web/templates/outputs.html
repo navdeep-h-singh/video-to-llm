@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% from "_macros.html" import empty %}
+{% block title %}Files — Video to LLM{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Files</h1>
+    <p class="page-sub">Everything this job made, on this computer.</p>
+  </div>
+  <div class="actions"><a class="btn btn-secondary" href="/jobs/{{ job_id }}">Back to the job</a></div>
+</div>
+
+<div class="panel">
+  {% if files %}
+  <table class="table">
+    <caption class="visually-hidden">Files produced by this job</caption>
+    <thead><tr><th scope="col">File</th><th scope="col">What it is</th><th scope="col">Size</th></tr></thead>
+    <tbody>
+      {% set names = {
+        'assembled': 'Everything in time order — words, quiet stretches, descriptions',
+        'master_assembled': 'Every video, one after another, in your order',
+        'transcript': 'The spoken words, with timings',
+        'frames_dir': 'The clean pictures',
+        'frames_api_dir': 'Numbered copies used for the descriptions',
+        'frames_manifest': 'Which picture is which, and when',
+        'silence_windows': 'Where the quiet stretches are',
+        'visual_results': 'The descriptions',
+        'visual_batch': 'One batch of descriptions',
+        'gaps': 'Moments with no description',
+        'provenance': 'What made this, with which settings, and when',
+        'analysis_input': 'A folder ready to hand to whatever you use next'
+      } %}
+      {% for file in files %}
+      <tr>
+        <td class="mono">{{ file.path }}</td>
+        <td>{{ names.get(file.kind, file.kind) }}</td>
+        <td class="mono">{{ file.size }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    {{ empty("No files yet.", "They appear here as the job produces them.") }}
+  {% endif %}
+</div>
+{% endblock %}

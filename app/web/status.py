@@ -1,0 +1,130 @@
+"""The status vocabulary the interface shows.
+
+Every state is presented as **text plus an icon shape plus a colour**, never
+colour alone. Colour-only status is unreadable to a large minority of users and
+invisible in a screenshot pasted into a monochrome document, so the word is
+always the primary signal and the shape distinguishes states that share a hue.
+
+The wording is deliberately plain. A first-time user should be able to read
+every one of these without knowing what an API is.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class StatusPresentation:
+    key: str
+    label: str
+    css_class: str
+    #: Described for screen readers, so the shape is not the only cue.
+    shape: str
+
+    @property
+    def aria_label(self) -> str:
+        return f"{self.label} ({self.shape})"
+
+
+#: Job and video states, in the order the specification lists them.
+STATUSES: dict[str, StatusPresentation] = {
+    "draft": StatusPresentation("draft", "Draft", "status-draft", "hollow square"),
+    "ready": StatusPresentation("ready", "Ready to start", "status-ready", "hollow square"),
+    "preparing": StatusPresentation("preparing", "Preparing", "status-running", "filled square"),
+    "transcribing": StatusPresentation(
+        "transcribing", "Writing the transcript", "status-running", "filled square"
+    ),
+    "analyzing": StatusPresentation(
+        "analyzing", "Describing pictures", "status-running", "filled square"
+    ),
+    "waiting_retry": StatusPresentation(
+        "waiting_retry", "Waiting to try again", "status-waiting", "turned square"
+    ),
+    "paused": StatusPresentation("paused", "Paused", "status-paused", "grey square"),
+    "needs_attention": StatusPresentation(
+        "needs_attention", "Needs you", "status-attention", "turned square"
+    ),
+    "completed": StatusPresentation("completed", "Finished", "status-done", "filled square"),
+    "completed_with_gaps": StatusPresentation(
+        "completed_with_gaps", "Finished, with gaps", "status-gaps", "outlined turned square"
+    ),
+    "cancelled": StatusPresentation("cancelled", "Cancelled", "status-cancelled", "faded square"),
+    # Video-only states.
+    "pending": StatusPresentation("pending", "Waiting", "status-ready", "hollow square"),
+    "skipped": StatusPresentation("skipped", "Skipped", "status-cancelled", "faded square"),
+}
+
+#: A state we do not recognise is shown as itself rather than hidden. Silently
+#: rendering an unknown status as "Finished" would be a lie.
+UNKNOWN = StatusPresentation("unknown", "Unknown state", "status-draft", "hollow square")
+
+
+def present(status: str | None) -> StatusPresentation:
+    if not status:
+        return UNKNOWN
+    return STATUSES.get(status, StatusPresentation(status, status, "status-draft", "square"))
+
+
+def is_finished(status: str | None) -> bool:
+    return status in {"completed", "completed_with_gaps", "cancelled"}
+
+
+def is_running(status: str | None) -> bool:
+    return status in {"preparing", "transcribing", "analyzing"}
+
+
+def format_duration(seconds: float | None) -> str:
+    if not seconds or seconds <= 0:
+        return "—"
+    total = int(seconds)
+    hours, remainder = divmod(total, 3600)
+    minutes, secs = divmod(remainder, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes}:{secs:02d}"
+
+
+def format_relative(timestamp: str | None) -> str:
+    """A human-scale 'when', not a machine timestamp.
+
+    "9 seconds ago" tells the reader whether the job is alive; an ISO string
+    makes them do the arithmetic themselves.
+    """
+    if not timestamp:
+        return "—"
+
+    from datetime import UTC, datetime
+
+    try:
+        parsed = datetime.fromisoformat(timestamp)
+    except ValueError:
+        return timestamp
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+
+    delta = (datetime.now(UTC) - parsed).total_seconds()
+    if delta < 0:
+        return "just now"
+    if delta < 45:
+        return f"{int(delta)} seconds ago"
+    if delta < 90:
+        return "a minute ago"
+    if delta < 3600:
+        return f"{int(delta // 60)} minutes ago"
+    if delta < 7200:
+        return "an hour ago"
+    if delta < 86400:
+        return f"{int(delta // 3600)} hours ago"
+    if delta < 172800:
+        return "yesterday"
+    return f"{int(delta // 86400)} days ago"
+
+
+def format_bytes(size: float | None) -> str:
+    if not size:
+        return "—"
+    for unit, threshold in (("TB", 1024**4), ("GB", 1024**3), ("MB", 1024**2), ("KB", 1024)):
+        if size >= threshold:
+            return f"{size / threshold:.1f} {unit}"
+    return f"{int(size)} bytes"
