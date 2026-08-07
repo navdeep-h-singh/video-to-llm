@@ -17,7 +17,14 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    PlainTextResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -169,12 +176,23 @@ def create_app(settings: Settings) -> FastAPI:
     ) -> HTMLResponse:
         connection = connect()
         try:
+            running = None
+            if connection is not None:
+                running = connection.execute(
+                    "SELECT id FROM jobs WHERE status IN"
+                    " ('preparing','transcribing','analyzing','waiting_retry') LIMIT 1"
+                ).fetchone()
+
             base = {
                 "nav_groups": nav(screen, connection),
                 "worker": worker_state(connection),
                 "disk_label": disk_label(),
                 "settings": current(),
                 "status": status_module,
+                # Only poll when there is something to watch; an idle screen
+                # should be genuinely idle.
+                "has_running": running is not None,
+                "live_job_id": running["id"] if running else "",
             }
             base.update(context)
             return templates.TemplateResponse(
@@ -388,20 +406,148 @@ def create_app(settings: Settings) -> FastAPI:
         )
 
     @app.get("/jobs/{job_id}/review", response_class=HTMLResponse)
-    def review(request: Request, job_id: str) -> HTMLResponse:
+    def review(request: Request, job_id: str, video: str = "", frame: int = 0) -> Response:
+        """The frame viewer: one picture, its description, and the words around it.
+
+        This is the screen the whole pipeline exists to feed. It reads the frame
+        listing from disk and the transcript from the video's own output folder,
+        so it works for any finished video without extra state.
+        """
+        import json as json_module
+
+        from app.web.files import frame_listing
+
         connection = connect()
-        videos: list[Any] = []
+        if connection is None:
+            return RedirectResponse("/", status_code=303)
+
         try:
-            if connection is not None:
-                videos = connection.execute(
-                    "SELECT * FROM job_videos WHERE job_id = ? AND is_active_version = 1"
-                    " ORDER BY sequence",
-                    (job_id,),
-                ).fetchall()
+            videos = connection.execute(
+                "SELECT * FROM job_videos WHERE job_id = ? AND is_active_version = 1"
+                " ORDER BY sequence",
+                (job_id,),
+            ).fetchall()
+            if not videos:
+                return page(request, "review.html", "dashboard", job_id=job_id, videos=[])
+
+            chosen = next((v for v in videos if v["id"] == video), videos[0])
+            root = current().output_root
+            video_dir = (
+                Path(root) / chosen["output_dir"]
+                if root and chosen["output_dir"]
+                else None
+            )
+
+            frames: list[dict[str, Any]] = []
+            transcript: list[dict[str, Any]] = []
+            descriptions: dict[int, dict[str, Any]] = {}
+
+            if video_dir is not None and video_dir.is_dir():
+                frames = frame_listing(video_dir / "frames")
+
+                transcript_path = video_dir / "transcript.json"
+                if transcript_path.is_file():
+                    payload = json_module.loads(transcript_path.read_text(encoding="utf-8"))
+                    transcript = payload.get("segments", [])
+
+                visual_path = video_dir / "visual_results.json"
+                if visual_path.is_file():
+                    payload = json_module.loads(visual_path.read_text(encoding="utf-8"))
+                    for entry in payload.get("descriptions", []):
+                        descriptions[int(entry.get("index", -1))] = entry
+
+            position = max(0, min(frame, len(frames) - 1)) if frames else 0
+            active = frames[position] if frames else None
+
+            # The transcript line nearest this frame, so the words and the
+            # picture describe the same moment rather than being read separately.
+            nearby = []
+            if active and transcript:
+                at = active["seconds"]
+                for segment in transcript:
+                    start = float(segment.get("start_seconds", 0))
+                    if at - 45 <= start <= at + 45:
+                        nearby.append(segment)
+
+            frames_relative = (
+                (Path(chosen["output_dir"]) / "frames").as_posix()
+                if chosen["output_dir"]
+                else ""
+            )
+
+            return page(
+                request,
+                "review.html",
+                "dashboard",
+                job_id=job_id,
+                videos=videos,
+                chosen=chosen,
+                frames=frames,
+                frame_count=len(frames),
+                position=position,
+                active=active,
+                description=descriptions.get(active["index"]) if active else None,
+                description_count=len(descriptions),
+                nearby=nearby,
+                transcript_count=len(transcript),
+                frames_relative=frames_relative,
+            )
         finally:
-            if connection is not None:
-                connection.close()
-        return page(request, "review.html", "dashboard", job_id=job_id, videos=videos)
+            connection.close()
+
+    @app.get("/jobs/{job_id}/frames", response_class=HTMLResponse)
+    def contact_sheet(request: Request, job_id: str, video: str = "", page_no: int = 0) -> Response:
+        """A grid of every extracted frame, paged.
+
+        Scanning two thousand frames for the interesting moments is not something
+        a one-at-a-time viewer can do.
+        """
+        from app.web.files import frame_listing
+
+        per_page = 120
+        connection = connect()
+        if connection is None:
+            return RedirectResponse("/", status_code=303)
+
+        try:
+            videos = connection.execute(
+                "SELECT * FROM job_videos WHERE job_id = ? AND is_active_version = 1"
+                " ORDER BY sequence",
+                (job_id,),
+            ).fetchall()
+            if not videos:
+                return page(request, "frames.html", "dashboard", job_id=job_id, videos=[])
+
+            chosen = next((v for v in videos if v["id"] == video), videos[0])
+            root = current().output_root
+            frames: list[dict[str, Any]] = []
+            if root and chosen["output_dir"]:
+                frames = frame_listing(Path(root) / chosen["output_dir"] / "frames")
+
+            total_pages = max(1, (len(frames) + per_page - 1) // per_page)
+            current_page = max(0, min(page_no, total_pages - 1))
+            start = current_page * per_page
+
+            return page(
+                request,
+                "frames.html",
+                "dashboard",
+                job_id=job_id,
+                videos=videos,
+                chosen=chosen,
+                frames=frames[start : start + per_page],
+                frame_count=len(frames),
+                page_no=current_page,
+                total_pages=total_pages,
+                start_index=start,
+                frames_relative=(
+                    (Path(chosen["output_dir"]) / "frames").as_posix()
+                    if chosen["output_dir"]
+                    else ""
+                ),
+            )
+        finally:
+            connection.close()
 
     @app.get("/jobs/{job_id}/outputs", response_class=HTMLResponse)
     def outputs(request: Request, job_id: str) -> HTMLResponse:
@@ -716,7 +862,223 @@ def create_app(settings: Settings) -> FastAPI:
                 status_code=500,
             )
 
+    # ── Files ─────────────────────────────────────────────────────────────
+
+    @app.get("/files/{relative_path:path}")
+    def serve_file(relative_path: str, download: int = 0) -> Response:
+        """Serve a file from the output root, and nothing outside it."""
+        from app.web.files import OutsideOutputRoot, resolve_within
+
+        if settings.output_root is None:
+            return PlainTextResponse("No output folder is set.", status_code=404)
+
+        try:
+            resolved = resolve_within(settings.output_root, relative_path)
+        except OutsideOutputRoot:
+            return PlainTextResponse("That file is outside the output folder.", status_code=403)
+        except (FileNotFoundError, OSError):
+            return PlainTextResponse("That file could not be found.", status_code=404)
+
+        if resolved.is_dir:
+            return PlainTextResponse("That is a folder, not a file.", status_code=400)
+
+        disposition = "attachment" if download else (
+            "inline" if resolved.serves_inline else "attachment"
+        )
+        return FileResponse(
+            resolved.path,
+            media_type=resolved.media_type,
+            filename=resolved.path.name,
+            headers={"Content-Disposition": f'{disposition}; filename="{resolved.path.name}"'},
+        )
+
+    @app.get("/preview/{relative_path:path}", response_class=HTMLResponse)
+    def preview_file(request: Request, relative_path: str) -> Response:
+        from app.web.files import OutsideOutputRoot, read_preview, resolve_within
+
+        if settings.output_root is None:
+            return RedirectResponse("/launch", status_code=303)
+
+        try:
+            resolved = resolve_within(settings.output_root, relative_path)
+        except OutsideOutputRoot:
+            return page(request, "notfound.html", "dashboard", what="file", status_code=403)
+        except (FileNotFoundError, OSError):
+            return page(request, "notfound.html", "dashboard", what="file", status_code=404)
+
+        text, truncated = ("", False)
+        if resolved.is_text:
+            text, truncated = read_preview(resolved)
+
+        return page(
+            request, "preview.html", "dashboard",
+            file=resolved, text=text, truncated=truncated,
+        )
+
+    @app.post("/reveal")
+    def reveal_in_file_manager(relative_path: str = Form("")) -> Response:
+        """Open the containing folder in the desktop file manager.
+
+        Legitimate here in a way it would not be in a hosted application: this
+        server runs on the user's own machine, on the loopback interface, and the
+        folder being revealed is one they chose.
+        """
+        from app.web.files import OutsideOutputRoot, resolve_within
+
+        if settings.output_root is None:
+            return JSONResponse({"ok": False, "detail": "No output folder is set."})
+
+        try:
+            resolved = resolve_within(settings.output_root, relative_path)
+        except (OutsideOutputRoot, FileNotFoundError, OSError):
+            return JSONResponse({"ok": False, "detail": "That file could not be found."})
+
+        target = resolved.path if resolved.is_dir else resolved.path.parent
+        try:
+            _open_in_file_manager(target)
+        except OSError as error:
+            return JSONResponse({"ok": False, "detail": str(error)})
+        return JSONResponse({"ok": True})
+
+    # ── Live progress ─────────────────────────────────────────────────────
+
+    @app.get("/api/progress")
+    def progress(job_id: str = "") -> JSONResponse:
+        """A small snapshot the screens poll so a running job is visibly running."""
+        connection = connect()
+        if connection is None:
+            return JSONResponse({"worker": "unknown", "jobs": []})
+
+        try:
+            worker = worker_state(connection)
+            # Two literal statements rather than one built by concatenation:
+            # the shapes differ only by a WHERE clause, and assembling SQL from
+            # pieces is how an injection gets in later even when today's inputs
+            # are safe.
+            if job_id:
+                rows = connection.execute(
+                    "SELECT id, name, status, updated_at FROM jobs WHERE id = ?",
+                    (job_id,),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT id, name, status, updated_at FROM jobs"
+                    " ORDER BY updated_at DESC LIMIT 50"
+                ).fetchall()
+
+            jobs = []
+            for row in rows:
+                stages = connection.execute(
+                    "SELECT stage, status, items_total, items_done FROM stage_runs s"
+                    " JOIN job_videos v ON v.id = s.job_video_id"
+                    " WHERE v.job_id = ? ORDER BY s.id DESC LIMIT 4",
+                    (row["id"],),
+                ).fetchall()
+                done = sum(int(s["items_done"] or 0) for s in stages)
+                total = sum(int(s["items_total"] or 0) for s in stages)
+                jobs.append(
+                    {
+                        "id": row["id"],
+                        "status": row["status"],
+                        "label": status_module.present(row["status"]).label,
+                        "updated": status_module.format_relative(row["updated_at"]),
+                        "done": done,
+                        "total": total,
+                        "running": status_module.is_running(row["status"]),
+                    }
+                )
+
+            return JSONResponse(
+                {
+                    "worker": worker.key,
+                    "worker_label": worker.label,
+                    "jobs": jobs,
+                }
+            )
+        finally:
+            connection.close()
+
+    # ── Worker control ────────────────────────────────────────────────────
+
+    @app.post("/worker/start")
+    def start_worker_route() -> Response:
+        """Start background processing without going back to a terminal.
+
+        The worker runs in its own process rather than a thread of this one, so
+        it survives the interface being restarted — which is the whole point of
+        the separation.
+        """
+        import subprocess
+        import sys
+
+        if settings.output_root is None:
+            return RedirectResponse("/launch", status_code=303)
+
+        connection = connect()
+        try:
+            if connection is not None:
+                state = worker_state(connection)
+                if state.key == "running":
+                    return RedirectResponse("/settings", status_code=303)
+                # A claim left by a process that is gone would otherwise make the
+                # new worker wait out its full staleness window for no reason.
+                _clear_dead_claim(connection, settings.output_root)
+        finally:
+            if connection is not None:
+                connection.close()
+
+        subprocess.Popen(
+            [sys.executable, "-m", "app.cli", "run-worker",
+             "--output-root", str(settings.output_root)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+        logger.info("Started a background worker on request")
+        return RedirectResponse("/settings", status_code=303)
+
     return app
+
+
+def _open_in_file_manager(target: Path) -> None:
+    import platform
+    import subprocess
+
+    system = platform.system()
+    if system == "Darwin":
+        subprocess.Popen(["open", str(target)])
+    elif system == "Windows":
+        subprocess.Popen(["explorer", str(target)])
+    else:
+        subprocess.Popen(["xdg-open", str(target)])
+
+
+def _clear_dead_claim(connection: sqlite3.Connection, output_root: Path) -> None:
+    """Remove a claim whose process is demonstrably gone on this machine.
+
+    Only ever clears a claim made by *this* host — a claim from another machine
+    cannot be checked from here, and guessing would be exactly the mistake the
+    double guard exists to prevent.
+    """
+    import os
+    import socket
+
+    row = connection.execute(
+        "SELECT hostname, pid FROM worker_claims WHERE output_root = ?",
+        (str(output_root),),
+    ).fetchone()
+    if row is None or row["hostname"] != socket.gethostname():
+        return
+
+    try:
+        os.kill(int(row["pid"]), 0)
+    except ProcessLookupError:
+        connection.execute(
+            "DELETE FROM worker_claims WHERE output_root = ?", (str(output_root),)
+        )
+        logger.info("Cleared a claim left behind by dead pid %s", row["pid"])
+    except (OSError, ValueError):
+        return
 
 
 def _stage_progress(connection: sqlite3.Connection, job_video_id: str) -> list[dict[str, Any]]:

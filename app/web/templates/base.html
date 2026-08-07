@@ -8,7 +8,7 @@
   {# No external stylesheet, font service, or script. The badge in the header
      promises nothing is uploaded; a CDN request would contradict it. #}
 </head>
-<body>
+<body data-has-running="{{ 'true' if has_running else 'false' }}" data-job-id="{{ live_job_id or '' }}">
 <a class="skip-link" href="#main">Skip to the main content</a>
 
 <div class="app">
@@ -51,6 +51,47 @@
   </div>
 </div>
 
+<script>
+  // Live progress. Every screen was static, so a job that was actively working
+  // looked identical to one that had stalled. Polling a small JSON snapshot is
+  // enough here — this is one user on one machine, not a fleet.
+  (function () {
+    var running = document.body.dataset.hasRunning === "true";
+    var jobId = document.body.dataset.jobId || "";
+    if (!running) return;
+
+    var timer = setInterval(function () {
+      fetch("/api/progress" + (jobId ? "?job_id=" + encodeURIComponent(jobId) : ""))
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (data) {
+          if (!data) return;
+          var stillRunning = data.jobs.some(function (j) { return j.running; });
+          // Reload rather than patch the DOM: the server already renders every
+          // state correctly, and a second rendering path would be a second place
+          // for the two to disagree.
+          if (!stillRunning) { clearInterval(timer); }
+          window.location.reload();
+        })
+        .catch(function () { /* a failed poll is not worth interrupting anyone for */ });
+    }, 5000);
+  })();
+
+  // "Show in Finder" — legitimate because this server runs on the user's own
+  // machine and the folder is one they chose.
+  document.addEventListener("click", function (event) {
+    var button = event.target.closest("[data-reveal]");
+    if (!button) return;
+    event.preventDefault();
+    var body = new FormData();
+    body.append("relative_path", button.dataset.reveal);
+    fetch("/reveal", { method: "POST", body: body })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (!data.ok) { button.textContent = data.detail || "Could not open it"; }
+      })
+      .catch(function () { button.textContent = "Could not open it"; });
+  });
+</script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

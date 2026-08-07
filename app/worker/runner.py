@@ -274,29 +274,65 @@ class Worker:
                 break
 
 
+#: How long to wait before trying the claim again when another worker holds it.
+CLAIM_RETRY_SECONDS = 20.0
+
+
 def run_worker(settings: Settings, *, once: bool = False) -> int:
-    """Take ownership of the output root and run the loop. Returns an exit code."""
+    """Take ownership of the output root and run the loop. Returns an exit code.
+
+    A claim conflict is treated as temporary, not fatal, whenever the worker is
+    meant to keep running. The holder may exit cleanly, crash, or go stale at any
+    moment, and a worker that gave up permanently on its first refusal would
+    leave the output root unattended for as long as the process stayed alive —
+    which is exactly what happened here: a worker was refused at start-up while
+    the previous one was genuinely alive, the previous one died five hours later,
+    and nothing ever tried again. A thirteen-video job sat untouched for nine
+    hours behind a claim held by a dead process.
+
+    `--once` still returns non-zero immediately, because a one-shot run has
+    nothing to wait for.
+    """
     root = settings.output_root
     if root is None:
         logger.error("No output folder chosen. Set one first.")
         return 1
 
     connection = open_database(root)
+    stop = threading.Event()
+
+    def request_stop(*_: object) -> None:
+        stop.set()
+
+    on_main_thread = threading.current_thread() is threading.main_thread()
+
     try:
-        with worker_lock(connection, root) as worker_id:
-            worker = Worker(settings, connection, worker_id)
+        while not stop.is_set():
+            try:
+                with worker_lock(connection, root) as worker_id:
+                    worker = Worker(settings, connection, worker_id)
 
-            # Only install handlers on the main thread: `start` runs the worker
-            # in a background thread, where signal() raises.
-            if threading.current_thread() is threading.main_thread():
-                for sig in (signal.SIGINT, signal.SIGTERM):
-                    signal.signal(sig, worker.request_stop)
+                    # Only install handlers on the main thread: `start` runs the
+                    # worker in a background thread, where signal() raises.
+                    if on_main_thread:
+                        for sig in (signal.SIGINT, signal.SIGTERM):
+                            signal.signal(sig, worker.request_stop)
 
-            logger.info("Worker ready. Closing the browser will not stop it.")
-            worker.run(once=once)
+                    logger.info("Worker ready. Closing the browser will not stop it.")
+                    worker.run(once=once)
+                return 0
+            except WorkerAlreadyRunningError as error:
+                if once:
+                    logger.error("%s", error)
+                    return 1
+                logger.warning(
+                    "%s Waiting %.0fs and trying again — the other worker may stop "
+                    "or its claim may go stale.",
+                    error,
+                    CLAIM_RETRY_SECONDS,
+                )
+                if stop.wait(CLAIM_RETRY_SECONDS):
+                    break
         return 0
-    except WorkerAlreadyRunningError as error:
-        logger.error("%s", error)
-        return 1
     finally:
         connection.close()

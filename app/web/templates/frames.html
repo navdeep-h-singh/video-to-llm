@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% from "_macros.html" import empty %}
+{% block title %}All pictures — Video to LLM{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>All pictures</h1>
+    <p class="page-sub">
+      {{ "{:,}".format(frame_count) }} from {{ chosen['display_name'] if chosen else 'this video' }}
+      {%- if total_pages > 1 %} · page {{ page_no + 1 }} of {{ total_pages }}{% endif %}
+    </p>
+  </div>
+  <div class="actions">
+    <a class="btn btn-secondary" href="/jobs/{{ job_id }}/review{% if chosen %}?video={{ chosen['id'] }}{% endif %}">One at a time</a>
+    <a class="btn btn-secondary" href="/jobs/{{ job_id }}">Back to the job</a>
+  </div>
+</div>
+
+{% if not frames %}
+  <div class="panel">{{ empty("No pictures yet.") }}</div>
+{% else %}
+<div class="sheet">
+  {% for f in frames %}
+    <a class="sheet-cell"
+       href="/jobs/{{ job_id }}/review?video={{ chosen['id'] }}&frame={{ start_index + loop.index0 }}">
+      <img loading="lazy" src="/files/{{ frames_relative }}/{{ f.filename }}"
+           alt="Picture {{ f.index + 1 }} at {{ f.label }}">
+      <span class="mono">{{ f.label }}</span>
+    </a>
+  {% endfor %}
+</div>
+
+{% if total_pages > 1 %}
+<nav class="viewer-nav" aria-label="Pages">
+  <a class="btn btn-secondary" href="/jobs/{{ job_id }}/frames?video={{ chosen['id'] }}&page_no={{ page_no - 1 }}"
+     {% if page_no == 0 %}aria-disabled="true" tabindex="-1" style="opacity:.4;pointer-events:none"{% endif %}>← Previous</a>
+  <span class="mono text-muted">{{ page_no + 1 }} / {{ total_pages }}</span>
+  <a class="btn btn-secondary" href="/jobs/{{ job_id }}/frames?video={{ chosen['id'] }}&page_no={{ page_no + 1 }}"
+     {% if page_no >= total_pages - 1 %}aria-disabled="true" tabindex="-1" style="opacity:.4;pointer-events:none"{% endif %}>Next →</a>
+</nav>
+{% endif %}
+{% endif %}
+{% endblock %}

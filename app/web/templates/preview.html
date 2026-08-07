@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}{{ file.path.name }} — Video to LLM{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1 style="font-size:26px">{{ file.path.name }}</h1>
+    <p class="page-sub mono">{{ file.relative }}</p>
+  </div>
+  <div class="actions">
+    <a class="btn btn-secondary" href="/files/{{ file.relative }}?download=1">Save a copy</a>
+    <button class="btn btn-secondary" type="button"
+            data-reveal="{{ file.relative }}">Show in Finder</button>
+  </div>
+</div>
+
+<div class="panel">
+  {% if file.is_image %}
+    <img src="/files/{{ file.relative }}" alt="{{ file.path.name }}" style="max-width:100%">
+  {% elif file.is_text %}
+    {% if truncated %}
+      <p class="note note-neutral">
+        This file is large, so only the first part is shown here. Save a copy to
+        read all of it.
+      </p>
+    {% endif %}
+    <pre class="filetext">{{ text }}</pre>
+  {% else %}
+    <p>This file cannot be shown here. Save a copy to open it.</p>
+  {% endif %}
+</div>
+{% endblock %}

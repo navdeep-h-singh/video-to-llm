@@ -5,40 +5,190 @@
 <div class="page-head">
   <div>
     <h1>Review</h1>
-    <p class="page-sub">Check anything marked low confidence before you rely on it.</p>
+    <p class="page-sub">
+      {% if frame_count %}
+        {{ "{:,}".format(frame_count) }} pictures
+        {%- if transcript_count %} · {{ "{:,}".format(transcript_count) }} transcript lines{% endif %}
+        {%- if description_count %} · {{ "{:,}".format(description_count) }} described{% endif %}
+      {% else %}
+        Check anything marked low confidence before you rely on it.
+      {% endif %}
+    </p>
   </div>
-  <div class="actions"><a class="btn btn-secondary" href="/jobs/{{ job_id }}">Back to the job</a></div>
+  <div class="actions">
+    {% if frame_count %}
+      <a class="btn btn-secondary" href="/jobs/{{ job_id }}/frames{% if chosen %}?video={{ chosen['id'] }}{% endif %}">All pictures</a>
+    {% endif %}
+    <a class="btn btn-secondary" href="/jobs/{{ job_id }}">Back to the job</a>
+  </div>
 </div>
 
-{% if videos %}
-<div class="panel">
+{% if videos and videos|length > 1 %}
+<div class="panel" style="padding:var(--space-3)">
+  <div class="seg" role="group" aria-label="Which video">
+    {% for v in videos %}
+      <a class="seg-opt" href="/jobs/{{ job_id }}/review?video={{ v['id'] }}"
+         style="text-decoration:none{% if chosen and v['id'] == chosen['id'] %};background:var(--color-accent-700);color:var(--color-bg){% endif %}">
+        {{ v['display_name'] }}
+      </a>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% if not frames %}
+  <div class="panel">
+    {{ empty("There are no pictures to review yet.",
+             "Pictures appear here once a job has taken them.") }}
+  </div>
+{% else %}
+
+<div class="viewer">
+  <figure class="viewer-stage">
+    <img id="frame-image"
+         src="/files/{{ frames_relative }}/{{ active.filename }}"
+         alt="Picture {{ active.index + 1 }} of {{ frame_count }}, at {{ active.label }}">
+    <figcaption>
+      <span class="mono">{{ active.label }}</span>
+      <span class="text-muted">picture {{ "{:,}".format(active.index + 1) }} of {{ "{:,}".format(frame_count) }}</span>
+      <a class="btn btn-ghost" href="/files/{{ frames_relative }}/{{ active.filename }}?download=1">Save this picture</a>
+    </figcaption>
+  </figure>
+
+  <div class="viewer-side">
+    {% if description %}
+      <div class="panel" style="margin:0">
+        <div class="panel-head">
+          <h4 style="margin:0">What is on screen</h4>
+          {% set conf = description.get('confidence', '') %}
+          <span class="tag {{ 'tag-accent' if conf == 'Low' else 'tag-accent-2' if conf == 'Medium' else 'tag-neutral' }}">
+            {{ {'High':'Confident','Medium':'Fairly sure','Low':'Low confidence — check this'}.get(conf, conf or 'Not described') }}
+          </span>
+        </div>
+        <dl class="facts">
+          {% for label, key in [
+              ('Chart', 'currency_pair'), ('Timeframe', 'timeframe'),
+              ('On screen', 'indicators_and_states'), ('Happening', 'exact_action'),
+              ('Text', 'visible_text'), ('In words', 'visual_description'),
+              ('Kind', 'setup_type')] %}
+            {% set value = description.get(key, 'Unknown') %}
+            {% if value and value != 'Unknown' %}
+              <dt>{{ label }}</dt><dd>{{ value }}</dd>
+            {% endif %}
+          {% endfor %}
+        </dl>
+      </div>
+    {% else %}
+      <div class="panel" style="margin:0">
+        <h4 style="margin:0 0 var(--space-2)">Not described</h4>
+        <p class="text-muted" style="font-size:13px;margin:0">
+          This picture has no description. You can add descriptions to this video
+          later without redoing the pictures or the transcript.
+        </p>
+        <form method="post" action="/jobs/{{ job_id }}/describe" style="margin-top:var(--space-3)">
+          <input type="hidden" name="video_id" value="{{ chosen['id'] if chosen else '' }}">
+          <button class="btn btn-secondary" type="submit">Describe this video now</button>
+        </form>
+      </div>
+    {% endif %}
+
+    <div class="panel" style="margin-top:var(--space-3)">
+      <div class="panel-head"><h4 style="margin:0">What was said around here</h4></div>
+      {% if nearby %}
+        <ul class="transcript">
+          {% for segment in nearby %}
+            <li class="{{ 'is-silence' if segment.get('is_silence') else '' }}
+                       {{ 'is-now' if segment.get('start_seconds', 0) <= active.seconds
+                          and segment.get('end_seconds', 0) >= active.seconds else '' }}">
+              <span class="mono">{{ segment.get('timestamp', '') }}</span>
+              <span>{{ segment.get('text', '') }}</span>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="text-muted" style="font-size:13px;margin:0">
+          Nothing was said within 45 seconds of this moment.
+        </p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<nav class="viewer-nav" aria-label="Move between pictures">
+  <a class="btn btn-secondary" id="prev-frame"
+     href="/jobs/{{ job_id }}/review?video={{ chosen['id'] }}&frame={{ position - 1 }}"
+     {% if position == 0 %}aria-disabled="true" tabindex="-1" style="opacity:.4;pointer-events:none"{% endif %}>
+    ← Previous
+  </a>
+
+  <form method="get" action="/jobs/{{ job_id }}/review" class="jump">
+    <input type="hidden" name="video" value="{{ chosen['id'] }}">
+    <label for="frame-jump" class="visually-hidden">Jump to picture number</label>
+    <input class="input mono" id="frame-jump" name="frame" type="number"
+           value="{{ position }}" min="0" max="{{ frame_count - 1 }}" style="width:110px">
+    <button class="btn btn-secondary" type="submit">Go</button>
+  </form>
+
+  <a class="btn btn-secondary" id="next-frame"
+     href="/jobs/{{ job_id }}/review?video={{ chosen['id'] }}&frame={{ position + 1 }}"
+     {% if position >= frame_count - 1 %}aria-disabled="true" tabindex="-1" style="opacity:.4;pointer-events:none"{% endif %}>
+    Next →
+  </a>
+
+  <span class="text-muted" style="margin-left:auto;font-size:12px">
+    Use ← and → to move between pictures
+  </span>
+</nav>
+
+<div class="panel" style="margin-top:var(--space-4)">
   <div class="seg" role="group" aria-label="Which picture to show">
     <label class="seg-opt"><input type="radio" name="frameview" value="clean" checked>Clean picture</label>
     <label class="seg-opt"><input type="radio" name="frameview" value="numbered">Numbered copy</label>
   </div>
-  <p class="text-muted" style="font-size:13px;margin-top:var(--space-2)">
-    The clean picture is exactly as it was captured — the one that ends up in your
-    exports. The numbered copy is what gets sent to a description model, so answers
-    can be matched back to the right moment.
+  <p class="text-muted" style="font-size:13px;margin:var(--space-2) 0 0" id="frameview-note">
+    This is the clean picture, exactly as it was captured — the one that ends up in
+    your exports.
   </p>
 </div>
-
-<div class="panel">
-  <table class="table">
-    <caption class="visually-hidden">Videos in this job</caption>
-    <thead><tr><th scope="col">Video</th><th scope="col">Pictures</th><th scope="col">State</th></tr></thead>
-    <tbody>
-      {% for video in videos %}
-      <tr>
-        <td>{{ video["display_name"] }}</td>
-        <td class="mono">{{ "{:,}".format(video["frame_count"] or 0) }}</td>
-        <td>{{ status.present(video["status"]).label }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
-{% else %}
-  {{ empty("There is nothing to review yet.", "Pictures and descriptions appear here once a job has run.") }}
 {% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Arrow keys move between pictures. Reviewing thousands of frames one click at
+  // a time is the work this screen exists for, so it should be fast.
+  document.addEventListener("keydown", function (event) {
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    var tag = (event.target.tagName || "").toLowerCase();
+    if (tag === "input" || tag === "textarea" || tag === "select") return;
+
+    var link = null;
+    if (event.key === "ArrowLeft")  link = document.getElementById("prev-frame");
+    if (event.key === "ArrowRight") link = document.getElementById("next-frame");
+    if (link && link.getAttribute("aria-disabled") !== "true") {
+      event.preventDefault();
+      window.location.href = link.href;
+    }
+  });
+
+  // The clean/numbered toggle swaps the image source rather than only relabelling.
+  (function () {
+    var image = document.getElementById("frame-image");
+    var note = document.getElementById("frameview-note");
+    if (!image || !note) return;
+
+    var clean = image.getAttribute("src");
+    var numbered = clean.replace("/frames/", "/frames_api/");
+
+    document.querySelectorAll('input[name="frameview"]').forEach(function (radio) {
+      radio.addEventListener("change", function () {
+        var wantsNumbered = radio.value === "numbered" && radio.checked;
+        image.src = wantsNumbered ? numbered : clean;
+        note.textContent = wantsNumbered
+          ? "This numbered copy is what gets sent to a description model, so answers can be matched back to the right moment. It is not the picture you export."
+          : "This is the clean picture, exactly as it was captured — the one that ends up in your exports.";
+      });
+    });
+  })();
+</script>
 {% endblock %}
