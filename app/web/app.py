@@ -29,7 +29,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.core.config import Settings, assert_loopback
-from app.core.db import database_path, open_database
+from app.core.db import database_path, open_database, utc_now
 from app.core.locks import claim_is_stale
 from app.core.logging import get_logger
 from app.services.doctor import run_doctor
@@ -215,7 +215,7 @@ def create_app(settings: Settings) -> FastAPI:
         )
 
     @app.get("/", response_class=HTMLResponse)
-    def dashboard(request: Request) -> Response:
+    def dashboard(request: Request, q: str = "", state: str = "", sort: str = "recent") -> Response:
         # A machine that has never been set up goes to the readiness screen
         # rather than an empty dashboard that explains nothing.
         if current().output_root is None:
@@ -224,34 +224,76 @@ def create_app(settings: Settings) -> FastAPI:
         connection = connect()
         jobs: list[dict[str, Any]] = []
         active: dict[str, Any] | None = None
+        total_jobs = 0
+
         try:
             if connection is not None:
-                rows = connection.execute(
-                    "SELECT * FROM jobs ORDER BY updated_at DESC LIMIT 50"
-                ).fetchall()
+                total_jobs = connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+                rows = connection.execute("SELECT * FROM jobs").fetchall()
+
                 for row in rows:
                     videos = connection.execute(
                         "SELECT COUNT(*) AS n, COALESCE(SUM(duration_seconds), 0) AS total"
                         " FROM job_videos WHERE job_id = ? AND is_active_version = 1",
                         (row["id"],),
                     ).fetchone()
+
                     entry = {
                         "id": row["id"],
                         "name": row["name"],
                         "status": status_module.present(row["status"]),
                         "raw_status": row["status"],
                         "videos": videos["n"],
+                        "seconds": videos["total"] or 0,
                         "length": status_module.format_duration(videos["total"]),
                         "updated": status_module.format_relative(row["updated_at"]),
+                        "updated_at": row["updated_at"] or "",
+                        "created_at": row["created_at"] or "",
+                        "elapsed": status_module.format_elapsed(
+                            row["started_at"], row["completed_at"]
+                        ),
                     }
                     jobs.append(entry)
                     if active is None and status_module.is_running(row["status"]):
                         active = entry
+
+                needle = q.strip().lower()
+                if needle:
+                    jobs = [j for j in jobs if needle in j["name"].lower()]
+                if state == "running":
+                    jobs = [j for j in jobs if status_module.is_running(j["raw_status"])]
+                elif state == "attention":
+                    jobs = [
+                        j
+                        for j in jobs
+                        if j["raw_status"] in {"needs_attention", "completed_with_gaps"}
+                    ]
+                elif state == "finished":
+                    jobs = [j for j in jobs if status_module.is_finished(j["raw_status"])]
+
+                keys = {
+                    "recent": lambda j: j["updated_at"],
+                    "oldest": lambda j: j["updated_at"],
+                    "name": lambda j: j["name"].lower(),
+                    "longest": lambda j: j["seconds"],
+                }
+                jobs.sort(key=keys.get(sort, keys["recent"]), reverse=sort in {"recent", "longest"})
         finally:
             if connection is not None:
                 connection.close()
 
-        return page(request, "dashboard.html", "dashboard", jobs=jobs, active=active)
+        return page(
+            request,
+            "dashboard.html",
+            "dashboard",
+            jobs=jobs,
+            active=active,
+            q=q,
+            state=state,
+            sort=sort,
+            total_jobs=total_jobs,
+            filtered=len(jobs) != total_jobs,
+        )
 
     @app.get("/launch", response_class=HTMLResponse)
     def launch(request: Request) -> HTMLResponse:
@@ -283,7 +325,11 @@ def create_app(settings: Settings) -> FastAPI:
                     "status": status_module.present(row["status"]),
                     "length": status_module.format_duration(row["duration_seconds"]),
                     "frames": row["frame_count"] or 0,
-                    "stages": _stage_progress(connection, row["id"]),
+                    "stages": _stage_progress(
+                        connection,
+                        row["id"],
+                        visual_requested=job["visual_provider"] not in (None, "", "none"),
+                    ),
                     "error": row["error_message"],
                 }
                 for row in connection.execute(
@@ -295,7 +341,7 @@ def create_app(settings: Settings) -> FastAPI:
 
             events = [
                 {
-                    "time": (row["created_at"] or "")[11:19],
+                    "time": status_module.format_moment(row["created_at"]),
                     "text": row["message"],
                     "level": row["level"],
                 }
@@ -308,6 +354,16 @@ def create_app(settings: Settings) -> FastAPI:
             if connection is not None:
                 connection.close()
 
+        total_size = ""
+        root = current().output_root
+        if root is not None:
+            from app.web.files import directory_size
+
+            job_dir = Path(root) / job_id
+            if job_dir.is_dir():
+                total_bytes, _ = directory_size(job_dir)
+                total_size = status_module.format_bytes(total_bytes)
+
         return page(
             request,
             "job.html",
@@ -316,6 +372,8 @@ def create_app(settings: Settings) -> FastAPI:
             job_status=status_module.present(job["status"]),
             videos=videos,
             events=events,
+            elapsed=status_module.format_elapsed(job["started_at"], job["completed_at"]),
+            total_size=total_size,
         )
 
     @app.get("/imports", response_class=HTMLResponse)
@@ -432,11 +490,7 @@ def create_app(settings: Settings) -> FastAPI:
 
             chosen = next((v for v in videos if v["id"] == video), videos[0])
             root = current().output_root
-            video_dir = (
-                Path(root) / chosen["output_dir"]
-                if root and chosen["output_dir"]
-                else None
-            )
+            video_dir = Path(root) / chosen["output_dir"] if root and chosen["output_dir"] else None
 
             frames: list[dict[str, Any]] = []
             transcript: list[dict[str, Any]] = []
@@ -470,9 +524,7 @@ def create_app(settings: Settings) -> FastAPI:
                         nearby.append(segment)
 
             frames_relative = (
-                (Path(chosen["output_dir"]) / "frames").as_posix()
-                if chosen["output_dir"]
-                else ""
+                (Path(chosen["output_dir"]) / "frames").as_posix() if chosen["output_dir"] else ""
             )
 
             return page(
@@ -550,26 +602,60 @@ def create_app(settings: Settings) -> FastAPI:
             connection.close()
 
     @app.get("/jobs/{job_id}/outputs", response_class=HTMLResponse)
-    def outputs(request: Request, job_id: str) -> HTMLResponse:
+    def outputs(request: Request, job_id: str) -> Response:
+        from app.web.files import directory_size, friendly_name
+
         connection = connect()
         files: list[dict[str, Any]] = []
+        total_bytes = 0
+        root = current().output_root
+
         try:
             if connection is not None:
-                files = [
-                    {
-                        "path": row["relative_path"],
-                        "kind": row["kind"],
-                        "size": status_module.format_bytes(row["size_bytes"]),
-                    }
-                    for row in connection.execute(
-                        "SELECT * FROM artifacts WHERE job_id = ? ORDER BY relative_path",
-                        (job_id,),
-                    ).fetchall()
-                ]
+                rows = connection.execute(
+                    "SELECT * FROM artifacts WHERE job_id = ? ORDER BY relative_path",
+                    (job_id,),
+                ).fetchall()
+
+                for row in rows:
+                    relative = row["relative_path"]
+                    full = Path(root) / relative if root else None
+                    is_dir = bool(full and full.is_dir())
+
+                    size_bytes = row["size_bytes"] or 0
+                    count = 0
+                    if is_dir and full is not None:
+                        # A dash where the size belongs hides the one number that
+                        # matters when deciding what to keep — a frames folder is
+                        # the largest thing this application makes.
+                        size_bytes, count = directory_size(full)
+
+                    total_bytes += size_bytes
+                    files.append(
+                        {
+                            "name": friendly_name(relative),
+                            "path": relative,
+                            "kind": row["kind"],
+                            "size": status_module.format_bytes(size_bytes),
+                            "is_dir": is_dir,
+                            "count": count,
+                            "previewable": not is_dir
+                            and Path(relative).suffix.lower()
+                            in {".txt", ".md", ".json", ".jpg", ".jpeg", ".png"},
+                        }
+                    )
         finally:
             if connection is not None:
                 connection.close()
-        return page(request, "outputs.html", "dashboard", job_id=job_id, files=files)
+
+        return page(
+            request,
+            "outputs.html",
+            "dashboard",
+            job_id=job_id,
+            files=files,
+            total_size=status_module.format_bytes(total_bytes),
+        )
 
     # ── Actions ───────────────────────────────────────────────────────────
 
@@ -882,8 +968,8 @@ def create_app(settings: Settings) -> FastAPI:
         if resolved.is_dir:
             return PlainTextResponse("That is a folder, not a file.", status_code=400)
 
-        disposition = "attachment" if download else (
-            "inline" if resolved.serves_inline else "attachment"
+        disposition = (
+            "attachment" if download else ("inline" if resolved.serves_inline else "attachment")
         )
         return FileResponse(
             resolved.path,
@@ -911,8 +997,12 @@ def create_app(settings: Settings) -> FastAPI:
             text, truncated = read_preview(resolved)
 
         return page(
-            request, "preview.html", "dashboard",
-            file=resolved, text=text, truncated=truncated,
+            request,
+            "preview.html",
+            "dashboard",
+            file=resolved,
+            text=text,
+            truncated=truncated,
         )
 
     @app.post("/reveal")
@@ -968,14 +1058,18 @@ def create_app(settings: Settings) -> FastAPI:
 
             jobs = []
             for row in rows:
-                stages = connection.execute(
-                    "SELECT stage, status, items_total, items_done FROM stage_runs s"
+                # Every column is qualified: `status` exists on both stage_runs
+                # and job_videos, and an unqualified reference is ambiguous.
+                totals = connection.execute(
+                    "SELECT COALESCE(SUM(s.items_done), 0) AS done,"
+                    "       COALESCE(SUM(s.items_total), 0) AS total"
+                    " FROM stage_runs s"
                     " JOIN job_videos v ON v.id = s.job_video_id"
-                    " WHERE v.job_id = ? ORDER BY s.id DESC LIMIT 4",
+                    " WHERE v.job_id = ? AND v.is_active_version = 1",
                     (row["id"],),
-                ).fetchall()
-                done = sum(int(s["items_done"] or 0) for s in stages)
-                total = sum(int(s["items_total"] or 0) for s in stages)
+                ).fetchone()
+                done = int(totals["done"] or 0)
+                total = int(totals["total"] or 0)
                 jobs.append(
                     {
                         "id": row["id"],
@@ -1028,14 +1122,213 @@ def create_app(settings: Settings) -> FastAPI:
                 connection.close()
 
         subprocess.Popen(
-            [sys.executable, "-m", "app.cli", "run-worker",
-             "--output-root", str(settings.output_root)],
+            [
+                sys.executable,
+                "-m",
+                "app.cli",
+                "run-worker",
+                "--output-root",
+                str(settings.output_root),
+            ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
         logger.info("Started a background worker on request")
         return RedirectResponse("/settings", status_code=303)
+
+    # ── Browsing the filesystem for videos (F05) ──────────────────────────
+
+    @app.get("/api/browse")
+    def browse(path: str = "") -> JSONResponse:
+        """List folders and videos at *path*, so videos can be picked not typed.
+
+        A hosted application could not do this. Running on the user's own machine
+        legitimately can, and it removes the single worst interaction in the
+        product — typing absolute paths into a textarea.
+        """
+        from app.pipeline.probe import SUPPORTED_EXTENSIONS
+
+        target = Path(path).expanduser() if path else Path.home()
+        try:
+            target = target.resolve()
+            if not target.is_dir():
+                target = target.parent
+            entries = sorted(target.iterdir(), key=lambda e: e.name.lower())
+        except (OSError, PermissionError) as error:
+            return JSONResponse(
+                {"ok": False, "detail": f"That folder could not be read ({error.strerror})."}
+            )
+
+        folders = []
+        videos = []
+        for entry in entries:
+            if entry.name.startswith("."):
+                continue
+            try:
+                if entry.is_dir():
+                    folders.append({"name": entry.name, "path": str(entry)})
+                elif entry.suffix.lower() in SUPPORTED_EXTENSIONS:
+                    videos.append(
+                        {
+                            "name": entry.name,
+                            "path": str(entry),
+                            "size": status_module.format_bytes(entry.stat().st_size),
+                        }
+                    )
+            except OSError:
+                continue
+
+        return JSONResponse(
+            {
+                "ok": True,
+                "path": str(target),
+                "parent": str(target.parent) if target.parent != target else "",
+                "folders": folders[:400],
+                "videos": videos[:400],
+            }
+        )
+
+    # ── Job management (F11, F12, F24) ────────────────────────────────────
+
+    @app.post("/jobs/{job_id}/rename")
+    def rename_job(job_id: str, name: str = Form("")) -> Response:
+        connection = connect()
+        if connection is not None:
+            try:
+                if name.strip():
+                    connection.execute(
+                        "UPDATE jobs SET name = ?, updated_at = ? WHERE id = ?",
+                        (name.strip(), utc_now(), job_id),
+                    )
+            finally:
+                connection.close()
+        return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+
+    @app.post("/jobs/{job_id}/delete")
+    def delete_job(job_id: str, remove_files: str = Form("")) -> Response:
+        """Delete a job. Files are removed only when explicitly asked for.
+
+        The default keeps the output: the database row is cheap to recreate and
+        the artifacts are the expensive part. Removing them has to be a separate,
+        deliberate choice.
+        """
+        import shutil as shutil_module
+
+        connection = connect()
+        if connection is None:
+            return RedirectResponse("/", status_code=303)
+
+        try:
+            root = current().output_root
+            if remove_files and root is not None:
+                job_dir = Path(root) / job_id
+                try:
+                    resolved = job_dir.resolve()
+                    resolved.relative_to(Path(root).resolve())
+                except ValueError:
+                    logger.error("Refused to delete outside the output folder")
+                else:
+                    if resolved.is_dir():
+                        shutil_module.rmtree(resolved, ignore_errors=True)
+                        logger.info("Removed the output folder for job %s", job_id[:8])
+
+            connection.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+        finally:
+            connection.close()
+        return RedirectResponse("/", status_code=303)
+
+    @app.post("/jobs/{job_id}/describe")
+    def describe_now(job_id: str, video_id: str = Form("")) -> Response:
+        """Add descriptions to a video that was processed without them.
+
+        The interface has always told the user this was possible. Until now
+        nothing did it — a promise the product made and could not keep.
+        """
+        active = current()
+        connection = connect()
+        if connection is None:
+            return RedirectResponse("/", status_code=303)
+
+        try:
+            if not active.visual_analysis.enabled or active.visual_analysis.provider == "none":
+                connection.execute(
+                    "INSERT INTO events (job_id, level, kind, message, created_at)"
+                    " VALUES (?,?,?,?,?)",
+                    (
+                        job_id,
+                        "warning",
+                        "describe_blocked",
+                        "Descriptions were requested, but no description model is set up yet. "
+                        "Choose one in Settings, then ask again.",
+                        utc_now(),
+                    ),
+                )
+                return RedirectResponse("/settings", status_code=303)
+
+            # Clearing the completed visual stage is what makes the worker run it
+            # again; the frames and transcript are untouched.
+            if video_id:
+                connection.execute(
+                    "DELETE FROM stage_runs WHERE job_video_id = ? AND stage = 'visual'",
+                    (video_id,),
+                )
+                connection.execute(
+                    "UPDATE job_videos SET status = 'pending', updated_at = ? WHERE id = ?",
+                    (utc_now(), video_id),
+                )
+            connection.execute(
+                "UPDATE jobs SET status = 'ready', updated_at = ? WHERE id = ?",
+                (utc_now(), job_id),
+            )
+            connection.execute(
+                "INSERT INTO events (job_id, level, kind, message, created_at) VALUES (?,?,?,?,?)",
+                (
+                    job_id,
+                    "info",
+                    "describe_requested",
+                    "Descriptions requested. The pictures and transcript are kept — "
+                    "only the descriptions are produced.",
+                    utc_now(),
+                ),
+            )
+        finally:
+            connection.close()
+        return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+
+    @app.post("/collections/{collection_id}/delete")
+    def delete_collection(collection_id: str) -> Response:
+        connection = connect()
+        if connection is not None:
+            try:
+                connection.execute("DELETE FROM collections WHERE id = ?", (collection_id,))
+            finally:
+                connection.close()
+        return RedirectResponse("/collections", status_code=303)
+
+    # ── Credentials (F06) ─────────────────────────────────────────────────
+
+    @app.post("/settings/key")
+    def save_key(request: Request, provider: str = Form(""), api_key: str = Form("")) -> Response:
+        """Store a key. Write-only: it is never rendered back, not even masked.
+
+        A few revealed characters still narrow a search, and presence is the only
+        fact the interface needs.
+        """
+        from app.credentials.store import CredentialError, set_credential
+
+        try:
+            set_credential(provider, api_key)
+        except CredentialError as error:
+            return _settings_page(request, problems=[str(error)])
+        return RedirectResponse("/settings?saved=key", status_code=303)
+
+    @app.post("/settings/key/remove")
+    def remove_key(provider: str = Form("")) -> Response:
+        from app.credentials.store import delete_credential
+
+        delete_credential(provider)
+        return RedirectResponse("/settings?saved=removed", status_code=303)
 
     return app
 
@@ -1073,15 +1366,15 @@ def _clear_dead_claim(connection: sqlite3.Connection, output_root: Path) -> None
     try:
         os.kill(int(row["pid"]), 0)
     except ProcessLookupError:
-        connection.execute(
-            "DELETE FROM worker_claims WHERE output_root = ?", (str(output_root),)
-        )
+        connection.execute("DELETE FROM worker_claims WHERE output_root = ?", (str(output_root),))
         logger.info("Cleared a claim left behind by dead pid %s", row["pid"])
     except (OSError, ValueError):
         return
 
 
-def _stage_progress(connection: sqlite3.Connection, job_video_id: str) -> list[dict[str, Any]]:
+def _stage_progress(
+    connection: sqlite3.Connection, job_video_id: str, *, visual_requested: bool = True
+) -> list[dict[str, Any]]:
     """Per-stage progress for one video, in pipeline order."""
     labels = {
         "frames": "Pictures",
@@ -1103,7 +1396,10 @@ def _stage_progress(connection: sqlite3.Connection, job_video_id: str) -> list[d
     for stage, label in labels.items():
         row = latest.get(stage)
         if row is None:
-            progress.append({"label": label, "percent": 0, "detail": "Waiting", "state": "ready"})
+            # "Waiting" on a finished job reads as a stalled stage. A stage that
+            # was never requested is a different thing and should say so.
+            detail = "Not run" if stage == "visual" and not visual_requested else "Waiting"
+            progress.append({"label": label, "percent": 0, "detail": detail, "state": "ready"})
             continue
 
         total = row["items_total"] or 0

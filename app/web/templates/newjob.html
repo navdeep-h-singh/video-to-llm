@@ -1,5 +1,120 @@
 {% extends "base.html" %}
 {% block title %}New job — Video to LLM{% endblock %}
+
+{% block scripts %}
+<script>
+  // Browse the machine for videos rather than typing absolute paths — the worst
+  // interaction in the product, and one a localhost application has no reason to
+  // impose.
+  (function () {
+    var list = document.getElementById("picker-list");
+    var here = document.getElementById("picker-here");
+    var up = document.getElementById("picker-up");
+    var chosenList = document.getElementById("chosen-list");
+    var chosenEmpty = document.getElementById("chosen-empty");
+    var textarea = document.getElementById("job-paths");
+    if (!list) return;
+
+    var chosen = [];
+    var parent = "";
+
+    function syncTextarea() {
+      textarea.value = chosen.join("\n");
+      chosenEmpty.style.display = chosen.length ? "none" : "";
+      chosenList.innerHTML = "";
+
+      chosen.forEach(function (path, index) {
+        var name = path.split("/").pop();
+        var li = document.createElement("li");
+
+        var num = document.createElement("span");
+        num.className = "num";
+        num.textContent = index + 1;
+
+        var label = document.createElement("span");
+        label.className = "grow";
+        label.textContent = name;
+        label.title = path;
+
+        li.appendChild(num);
+        li.appendChild(label);
+
+        [["↑", -1, "Move up"], ["↓", 1, "Move down"], ["✕", 0, "Remove"]].forEach(function (spec) {
+          var button = document.createElement("button");
+          button.type = "button";
+          button.className = "btn btn-ghost";
+          button.textContent = spec[0];
+          button.setAttribute("aria-label", spec[2] + " " + name);
+          button.addEventListener("click", function () {
+            if (spec[1] === 0) {
+              chosen.splice(index, 1);
+            } else {
+              var to = index + spec[1];
+              if (to < 0 || to >= chosen.length) return;
+              var moved = chosen.splice(index, 1)[0];
+              chosen.splice(to, 0, moved);
+            }
+            syncTextarea();
+          });
+          li.appendChild(button);
+        });
+
+        chosenList.appendChild(li);
+      });
+    }
+
+    function row(label, onClick, size) {
+      var button = document.createElement("button");
+      button.type = "button";
+      button.className = "picker-row";
+      button.textContent = label;
+      if (size) {
+        var span = document.createElement("span");
+        span.className = "size";
+        span.textContent = size;
+        button.appendChild(span);
+      }
+      button.addEventListener("click", onClick);
+      return button;
+    }
+
+    function load(path) {
+      fetch("/api/browse" + (path ? "?path=" + encodeURIComponent(path) : ""))
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          list.innerHTML = "";
+          if (!data.ok) { here.textContent = data.detail; return; }
+
+          here.textContent = data.path;
+          parent = data.parent;
+          up.disabled = !parent;
+
+          data.folders.forEach(function (folder) {
+            list.appendChild(row("📁  " + folder.name, function () { load(folder.path); }));
+          });
+
+          data.videos.forEach(function (video) {
+            list.appendChild(row("🎬  " + video.name, function () {
+              if (chosen.indexOf(video.path) === -1) { chosen.push(video.path); syncTextarea(); }
+            }, video.size));
+          });
+
+          if (!data.folders.length && !data.videos.length) {
+            var note = document.createElement("div");
+            note.className = "picker-row";
+            note.textContent = "Nothing here that can be processed.";
+            list.appendChild(note);
+          }
+        })
+        .catch(function () { here.textContent = "That folder could not be read."; });
+    }
+
+    up.addEventListener("click", function () { if (parent) load(parent); });
+    load("");
+    syncTextarea();
+  })();
+</script>
+{% endblock %}
 {% block content %}
 <div class="page-head">
   <div>
@@ -24,14 +139,33 @@
   </div>
 
   <div class="field" style="margin-top:var(--space-4)">
-    <label for="job-paths">Which videos? One full path per line, up to twenty.</label>
-    <textarea class="input" id="job-paths" name="paths" rows="6"
-      aria-describedby="paths-help"
-      placeholder="/path/to/capture_0914.mp4&#10;/path/to/screen_1145.mov">{{ submitted_paths or "" }}</textarea>
-    <p id="paths-help" class="text-muted" style="font-size:12px;margin-top:var(--space-1)">
-      .mp4, .mov and .webm. They are read where they are and never changed.
-      The order you list them in is the order they are processed.
+    <span class="field-label">Which videos?</span>
+
+    <div class="picker">
+      <div class="picker-bar">
+        <button class="btn btn-secondary" type="button" id="picker-up">Up one folder</button>
+        <span class="here mono" id="picker-here">Loading…</span>
+      </div>
+      <div class="picker-list" id="picker-list" role="listbox" aria-label="Folders and videos"></div>
+    </div>
+
+    <p class="text-muted" style="font-size:12px;margin-top:var(--space-1)">
+      .mp4, .mov and .webm. Videos are read where they are and never changed or moved.
     </p>
+
+    <h5 style="margin:var(--space-4) 0 0">Chosen, in order</h5>
+    <p class="text-muted" style="font-size:12px;margin:2px 0 0">
+      They are processed in this order. Use the arrows to change it — the order is
+      yours and is never guessed from the filenames.
+    </p>
+    <ul class="chosen-list" id="chosen-list"></ul>
+    <p class="text-muted" style="font-size:12px" id="chosen-empty">Nothing chosen yet.</p>
+
+    <label for="job-paths" style="display:block;margin-top:var(--space-3);font-size:12px">
+      Or type full paths, one per line
+    </label>
+    <textarea class="input" id="job-paths" name="paths" rows="3"
+      placeholder="/path/to/capture_0914.mp4">{{ submitted_paths or "" }}</textarea>
   </div>
 
   <fieldset style="border:0;padding:0;margin:var(--space-6) 0 0">

@@ -5,16 +5,22 @@
 <div class="page-head">
   <div>
     <h1>Files</h1>
-    <p class="page-sub">Everything this job made, on this computer.</p>
+    <p class="page-sub">
+      Everything this job made, on this computer{% if total_size and total_size != "—" %} · {{ total_size }} in total{% endif %}
+    </p>
   </div>
-  <div class="actions"><a class="btn btn-secondary" href="/jobs/{{ job_id }}">Back to the job</a></div>
+  <div class="actions">
+    <button class="btn btn-secondary" type="button" data-reveal="{{ job_id }}">Show in Finder</button>
+    <a class="btn btn-secondary" href="/jobs/{{ job_id }}">Back to the job</a>
+  </div>
 </div>
 
 <div class="panel">
   {% if files %}
   <table class="table">
     <caption class="visually-hidden">Files produced by this job</caption>
-    <thead><tr><th scope="col">File</th><th scope="col">What it is</th><th scope="col">Size</th></tr></thead>
+    <thead><tr><th scope="col">File</th><th scope="col">What it is</th>
+               <th scope="col">Size</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
     <tbody>
       {% set names = {
         'assembled': 'Everything in time order — words, quiet stretches, descriptions',
@@ -32,9 +38,24 @@
       } %}
       {% for file in files %}
       <tr>
-        <td class="mono">{{ file.path }}</td>
+        <td>
+          {% if file.previewable %}
+            <a href="/preview/{{ file.path }}">{{ file.name }}</a>
+          {% else %}
+            {{ file.name }}
+          {% endif %}
+          {% if file.is_dir and file.count %}
+            <span class="text-muted">({{ "{:,}".format(file.count) }} files)</span>
+          {% endif %}
+          <div class="mono text-muted" style="font-size:11px">{{ file.path }}</div>
+        </td>
         <td>{{ names.get(file.kind, file.kind) }}</td>
         <td class="mono">{{ file.size }}</td>
+        <td style="white-space:nowrap">
+          {% if file.previewable %}<a class="btn btn-ghost" href="/preview/{{ file.path }}">Open</a>{% endif %}
+          {% if not file.is_dir %}<a class="btn btn-ghost" href="/files/{{ file.path }}?download=1">Save</a>{% endif %}
+          <button class="btn btn-ghost" type="button" data-reveal="{{ file.path }}">Show</button>
+        </td>
       </tr>
       {% endfor %}
     </tbody>

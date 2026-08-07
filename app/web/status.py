@@ -128,3 +128,66 @@ def format_bytes(size: float | None) -> str:
         if size >= threshold:
             return f"{size / threshold:.1f} {unit}"
     return f"{int(size)} bytes"
+
+
+def format_elapsed(started_at: str | None, completed_at: str | None = None) -> str:
+    """How long a job took, or has been going.
+
+    Previously derivable only by subtracting two timestamps in the event log.
+    "2,307 pictures in 19 seconds" is one of the most persuasive facts this
+    application produces and it was hiding it from its own user.
+    """
+    if not started_at:
+        return "—"
+
+    from datetime import UTC, datetime
+
+    def parse(value: str) -> datetime | None:
+        try:
+            moment = datetime.fromisoformat(value)
+        except (TypeError, ValueError):
+            return None
+        return moment.replace(tzinfo=UTC) if moment.tzinfo is None else moment
+
+    start = parse(started_at)
+    if start is None:
+        return "—"
+    end = parse(completed_at) if completed_at else datetime.now(UTC)
+    if end is None:
+        end = datetime.now(UTC)
+
+    seconds = max(0, int((end - start).total_seconds()))
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m {seconds % 60}s"
+    return f"{seconds // 3600}h {(seconds % 3600) // 60}m"
+
+
+def format_moment(timestamp: str | None) -> str:
+    """A log timestamp with its date, so 'yesterday' is expressible.
+
+    The event log showed times alone, which is self-defeating in a tool designed
+    to run for hours and survive overnight suspensions.
+    """
+    if not timestamp:
+        return "—"
+
+    from datetime import UTC, datetime
+
+    try:
+        moment = datetime.fromisoformat(timestamp)
+    except (TypeError, ValueError):
+        return timestamp
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=UTC)
+
+    local = moment.astimezone()
+    today = datetime.now().astimezone().date()
+    delta = (today - local.date()).days
+
+    if delta == 0:
+        return local.strftime("%H:%M:%S")
+    if delta == 1:
+        return f"yesterday {local.strftime('%H:%M')}"
+    return local.strftime("%-d %b %H:%M")

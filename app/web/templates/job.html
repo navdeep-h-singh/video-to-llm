@@ -13,12 +13,41 @@
   </form>
 </div>
 {% endif %}
+<div class="panel">
+  <div class="panel-head"><h4 style="margin:0">This job</h4></div>
+  <form method="post" action="/jobs/{{ job.id }}/rename" class="inline-form">
+    <label for="rename" class="visually-hidden">Rename this job</label>
+    <input class="input" id="rename" name="name" value="{{ job.name }}" style="max-width:340px">
+    <button class="btn btn-secondary" type="submit">Rename</button>
+  </form>
+
+  <details style="margin-top:var(--space-4)">
+    <summary style="cursor:pointer;font-size:14px">Remove this job</summary>
+    <form method="post" action="/jobs/{{ job.id }}/delete" style="margin-top:var(--space-3)">
+      <p style="font-size:14px">
+        Removing the job takes it off this list. By default the pictures,
+        transcripts and documents it produced are left exactly where they are —
+        they are the expensive part and the list entry is not.
+      </p>
+      <label class="radio" style="margin-bottom:var(--space-3)">
+        <input type="checkbox" name="remove_files" value="1">
+        <span class="dot" aria-hidden="true"></span>
+        <span>Also delete everything this job produced{% if total_size %} ({{ total_size }}){% endif %}</span>
+      </label>
+      <div><button class="btn btn-secondary" type="submit">Remove this job</button></div>
+    </form>
+  </details>
+</div>
 {% endblock %}
 {% block content %}
 <div class="page-head">
   <div>
     <h1>{{ job.name }}</h1>
-    <p class="page-sub">{{ videos|length }} video{{ '' if videos|length == 1 else 's' }}</p>
+    <p class="page-sub">
+      {{ videos|length }} video{{ '' if videos|length == 1 else 's' }}
+      {%- if elapsed and elapsed != '—' %} · took {{ elapsed }}{% endif %}
+      {%- if total_size %} · {{ total_size }} on disk{% endif %}
+    </p>
   </div>
   <div class="actions">
     {{ status(job_status) }}

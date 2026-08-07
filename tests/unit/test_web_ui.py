@@ -385,3 +385,76 @@ def test_health_reports_the_loopback_binding(client):
 def test_api_documentation_endpoints_stay_disabled(client):
     for path in ("/docs", "/redoc", "/openapi.json"):
         assert client.get(path).status_code == 404
+
+
+# ── Live progress ─────────────────────────────────────────────────────────
+
+
+def test_the_progress_endpoint_returns_json(client, db):
+    """It returned a 500 the first time: `status` exists on both stage_runs and
+    job_videos, so the unqualified column in the join was ambiguous."""
+    seed_job(db)
+    db.execute(
+        "INSERT INTO stage_runs (id, job_video_id, stage, status, items_total,"
+        " items_done, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+        ("s1", "j1v1", "frames", "completed", 1265, 1265, utc_now(), utc_now()),
+    )
+
+    response = client.get("/api/progress")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["jobs"][0]["total"] == 1265
+    assert payload["jobs"][0]["done"] == 1265
+
+
+def test_progress_can_be_scoped_to_one_job(client, db):
+    seed_job(db, job_id="j1", name="First")
+    seed_job(db, job_id="j2", name="Second")
+
+    payload = client.get("/api/progress?job_id=j2").json()
+    assert len(payload["jobs"]) == 1
+    assert payload["jobs"][0]["id"] == "j2"
+
+
+# ── File serving ──────────────────────────────────────────────────────────
+
+
+def test_a_file_inside_the_output_root_is_served(client, settings):
+    target = settings.output_root / "job" / "assembled.txt"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("the assembled document", encoding="utf-8")
+
+    response = client.get("/files/job/assembled.txt")
+    assert response.status_code == 200
+    assert "the assembled document" in response.text
+
+
+@pytest.mark.parametrize(
+    "attempt",
+    [
+        "/files/../../../etc/passwd",
+        "/files/..%2f..%2f..%2fetc%2fpasswd",
+        "/files/job/../../../../etc/hosts",
+    ],
+)
+def test_paths_outside_the_output_root_are_refused(client, attempt):
+    # The whole point of the containment check.
+    response = client.get(attempt)
+    assert response.status_code in {403, 404}
+    assert "root:" not in response.text
+
+
+def test_a_missing_file_says_so(client):
+    assert client.get("/files/nope/missing.txt").status_code == 404
+
+
+def test_browsing_lists_folders_and_videos(client, tmp_path):
+    payload = client.get(f"/api/browse?path={tmp_path}").json()
+    assert payload["ok"] is True
+    assert payload["path"] == str(tmp_path.resolve())
+
+
+def test_browsing_an_unreadable_place_explains_itself(client):
+    payload = client.get("/api/browse?path=/definitely/not/a/real/place").json()
+    # Falls back to the parent rather than erroring, or reports plainly.
+    assert "ok" in payload

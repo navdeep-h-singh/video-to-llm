@@ -465,3 +465,54 @@ textarea.input { min-height: 90px; resize: vertical; }
 @media (max-width: 1023px) {
   .viewer { grid-template-columns: minmax(0, 1fr); }
 }
+
+.filterbar {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
+  padding: var(--space-3);
+  border: 1px solid var(--color-divider);
+  margin-bottom: var(--space-4);
+}
+.inline-form { display: flex; gap: var(--space-2); align-items: center; flex-wrap: wrap; }
+select.input { appearance: auto; }
+
+/* Picking videos from disk rather than typing paths. */
+.picker { border: 1px solid var(--color-divider); margin-top: var(--space-2); }
+.picker-bar {
+  display: flex; gap: var(--space-2); align-items: center;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--color-divider);
+  background: var(--color-neutral-100);
+  font-size: 13px;
+}
+.picker-bar .here { font-family: var(--font-body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.picker-list { max-height: 320px; overflow: auto; }
+.picker-row {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: 6px var(--space-3); width: 100%; text-align: left;
+  background: transparent; border: 0; border-bottom: 1px solid var(--color-rule, var(--color-neutral-200));
+  font: inherit; font-size: 13.5px; color: var(--color-text); cursor: pointer;
+}
+.picker-row:hover { background: color-mix(in srgb, var(--color-text) 6%, transparent); }
+.picker-row .size { margin-left: auto; font-size: 12px; color: var(--color-neutral-700); }
+.chosen-list { list-style: none; margin: var(--space-2) 0 0; padding: 0; font-size: 13.5px; }
+.chosen-list li {
+  display: flex; align-items: center; gap: var(--space-2);
+  padding: 5px 0; border-bottom: 1px solid var(--color-divider);
+}
+.chosen-list .num { font-variant-numeric: tabular-nums; color: var(--color-neutral-700); width: 22px; }
+.chosen-list .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+.keys { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-3); }
+.key-row {
+  display: flex; gap: var(--space-3); align-items: center; flex-wrap: wrap;
+  padding: var(--space-3); border: 1px solid var(--color-divider);
+}
+.key-name { min-width: 220px; display: flex; flex-direction: column; gap: 2px; }
+.key-name strong { font-size: 14px; }
+.field-label {
+  display: block; font-size: 12px; margin-bottom: 5px;
+  color: color-mix(in srgb, var(--color-text) 70%, transparent);
+}

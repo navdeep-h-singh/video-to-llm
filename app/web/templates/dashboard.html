@@ -10,12 +10,28 @@
   <div class="actions"><a class="btn btn-primary" href="/jobs/new">New job</a></div>
 </div>
 
+{% if worker.key != "running" and total_jobs %}
+<div class="panel" style="border-left:3px solid var(--color-accent)" role="alert">
+  <div class="panel-head">
+    <h4 style="margin:0">Background processing is not running</h4>
+  </div>
+  <p style="font-size:14px;margin:0">
+    Nothing will start or continue until it is. Everything already finished is safe.
+  </p>
+  <form method="post" action="/worker/start" style="margin-top:var(--space-3)">
+    <button class="btn btn-primary" type="submit">Start background processing</button>
+  </form>
+</div>
+{% endif %}
+
 {% if active %}
 <div class="panel" style="border-left:3px solid var(--color-accent)">
   <div class="panel-head">
     <h4 style="margin:0">{{ active.name }}</h4>
     {{ status(active.status) }}
-    <span class="text-muted" style="margin-left:auto;font-size:13px">updated {{ active.updated }}</span>
+    <span class="text-muted" style="margin-left:auto;font-size:13px">
+      running {{ active.elapsed }} · updated {{ active.updated }}
+    </span>
   </div>
   <p class="text-muted" style="font-size:13px;margin:0">
     {{ active.videos }} video{{ '' if active.videos == 1 else 's' }} · {{ active.length }}
@@ -25,13 +41,40 @@
 </div>
 {% endif %}
 
-<div class="panel" style="margin-top:var(--space-4)">
+{% if total_jobs > 1 %}
+<form class="filterbar" method="get" action="/">
+  <label for="q" class="visually-hidden">Search jobs by name</label>
+  <input class="input" id="q" name="q" value="{{ q }}" placeholder="Search by name" style="max-width:260px">
+
+  <label for="state" class="visually-hidden">Filter by state</label>
+  <select class="input" id="state" name="state" style="max-width:180px">
+    <option value="">Any state</option>
+    <option value="running"   {% if state == 'running'   %}selected{% endif %}>Working now</option>
+    <option value="attention" {% if state == 'attention' %}selected{% endif %}>Needs a look</option>
+    <option value="finished"  {% if state == 'finished'  %}selected{% endif %}>Finished</option>
+  </select>
+
+  <label for="sort" class="visually-hidden">Sort</label>
+  <select class="input" id="sort" name="sort" style="max-width:180px">
+    <option value="recent"  {% if sort == 'recent'  %}selected{% endif %}>Most recent</option>
+    <option value="oldest"  {% if sort == 'oldest'  %}selected{% endif %}>Oldest first</option>
+    <option value="name"    {% if sort == 'name'    %}selected{% endif %}>By name</option>
+    <option value="longest" {% if sort == 'longest' %}selected{% endif %}>Longest first</option>
+  </select>
+
+  <button class="btn btn-secondary" type="submit">Apply</button>
+  {% if q or state %}<a class="btn btn-ghost" href="/">Clear</a>{% endif %}
+</form>
+{% endif %}
+
+<div class="panel">
   {% if jobs %}
   <table class="table">
-    <caption class="visually-hidden">Every job, most recently updated first</caption>
+    <caption class="visually-hidden">Every job</caption>
     <thead>
       <tr><th scope="col">Job</th><th scope="col">Videos</th><th scope="col">Length</th>
-          <th scope="col">State</th><th scope="col">Updated</th><th scope="col"></th></tr>
+          <th scope="col">Took</th><th scope="col">State</th><th scope="col">Updated</th>
+          <th scope="col"><span class="visually-hidden">Actions</span></th></tr>
     </thead>
     <tbody>
       {% for job in jobs %}
@@ -39,6 +82,7 @@
         <td><a href="/jobs/{{ job.id }}">{{ job.name }}</a></td>
         <td class="mono">{{ job.videos }}</td>
         <td class="mono">{{ job.length }}</td>
+        <td class="mono text-muted">{{ job.elapsed }}</td>
         <td>{{ status(job.status) }}</td>
         <td class="text-muted">{{ job.updated }}</td>
         <td><a class="btn btn-ghost" href="/jobs/{{ job.id }}">Open</a></td>
@@ -46,6 +90,8 @@
       {% endfor %}
     </tbody>
   </table>
+  {% elif filtered %}
+    {{ empty("No jobs match that.", "Try a different search, or clear the filters.") }}
   {% else %}
     {{ empty("No jobs yet.", "Start one and it will keep working in the background.") }}
   {% endif %}

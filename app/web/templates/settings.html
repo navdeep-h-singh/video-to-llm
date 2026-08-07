@@ -189,26 +189,44 @@
     audio. You see what will be sent and roughly what it costs before anything
     leaves this computer, and sending stops at your cap.
   </p>
-  <table class="table" style="margin-top:var(--space-3)">
-    <caption class="visually-hidden">API keys</caption>
-    <thead><tr><th scope="col">Service</th><th scope="col">Key</th><th scope="col">Where it is kept</th></tr></thead>
-    <tbody>
-      {% for entry in credentials %}
-      <tr>
-        <td>{{ entry.provider }}</td>
-        <td>
-          {# Presence only. A stored key is never shown back, not even partly. #}
-          {% if entry.status.present %}
-            <span class="tag tag-neutral">Set</span>
-          {% else %}
-            <span class="text-muted">Not set</span>
-          {% endif %}
-        </td>
-        <td class="text-muted" style="font-size:13px">{{ entry.status.detail }}</td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
+  <div class="keys">
+    {% for entry in credentials %}
+    <div class="key-row">
+      <div class="key-name">
+        <strong>{{ {'anthropic':'Claude','google':'Google Gemini','openai':'OpenAI',
+                    'openai_compatible':'Another service'}.get(entry.provider, entry.provider) }}</strong>
+        {% if entry.status.present %}
+          <span class="tag tag-neutral">Key set</span>
+        {% else %}
+          <span class="text-muted" style="font-size:12px">No key set</span>
+        {% endif %}
+        <div class="text-muted" style="font-size:12px">{{ entry.status.detail }}</div>
+      </div>
+
+      <form method="post" action="/settings/key" class="inline-form">
+        <input type="hidden" name="provider" value="{{ entry.provider }}">
+        <label for="key-{{ entry.provider }}" class="visually-hidden">
+          API key for {{ entry.provider }}
+        </label>
+        {# Write-only. A stored key is never rendered back, not even masked: a few
+           revealed characters still narrow a search, and presence is the only
+           fact this screen needs to show. #}
+        <input class="input" id="key-{{ entry.provider }}" name="api_key" type="password"
+               autocomplete="off" spellcheck="false"
+               placeholder="{{ 'Replace the stored key' if entry.status.present else 'Paste a key' }}"
+               style="max-width:250px">
+        <button class="btn btn-secondary" type="submit">Save</button>
+      </form>
+
+      {% if entry.status.present %}
+      <form method="post" action="/settings/key/remove">
+        <input type="hidden" name="provider" value="{{ entry.provider }}">
+        <button class="btn btn-ghost" type="submit">Remove</button>
+      </form>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
   <p class="text-muted" style="font-size:12px;margin-top:var(--space-2)">
     Keys live in this computer's secure store, or in the environment for this
     session only. They are never written to a file, never shown back, and never

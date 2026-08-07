@@ -24,8 +24,13 @@ logger = get_logger(__name__)
 #: Rendered inline in the browser rather than downloaded.
 INLINE_TYPES = frozenset(
     {
-        "image/jpeg", "image/png", "image/webp", "image/gif",
-        "text/plain", "text/markdown", "application/json",
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "image/gif",
+        "text/plain",
+        "text/markdown",
+        "application/json",
     }
 )
 
@@ -84,9 +89,7 @@ def resolve_within(output_root: Path, relative_path: str) -> ResolvedFile:
         candidate.relative_to(root)
     except ValueError as error:
         logger.warning("Refused a file request outside the output folder: %r", relative_path)
-        raise OutsideOutputRoot(
-            "That file is outside the output folder."
-        ) from error
+        raise OutsideOutputRoot("That file is outside the output folder.") from error
 
     if not candidate.exists():
         raise FileNotFoundError(relative_path)
