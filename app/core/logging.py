@@ -14,6 +14,7 @@ import logging
 import logging.handlers
 import sys
 from pathlib import Path
+from typing import IO
 
 from app.core.redaction import install_redaction
 
@@ -31,7 +32,7 @@ def configure_logging(
     *,
     level: str = "INFO",
     log_dir: Path | None = None,
-    stream: object | None = None,
+    stream: IO[str] | None = None,
     force: bool = False,
 ) -> logging.Logger:
     """Configure the application logger and return it.
