@@ -497,3 +497,168 @@ def test_a_local_only_job_makes_no_provider_call(tmp_path, monkeypatch):
         assert not (context.output_dir / "visual_results.json").exists()
     finally:
         connection.close()
+
+
+# ── Assembly and the handoff ──────────────────────────────────────────────
+
+
+def test_a_job_produces_an_assembled_document(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "app.pipeline.stages.FasterWhisperTranscriber", lambda **kwargs: StubTranscriber()
+    )
+    from app.core.db import open_database
+
+    settings = Settings().with_output_root(tmp_path / "out")
+    connection = open_database(settings.output_root)
+    try:
+        source = make_video(tmp_path / "src" / "clip.mp4", duration_seconds=6.0)
+        _make_job(connection, settings, [source])
+    finally:
+        connection.close()
+
+    run_worker(settings, once=True)
+
+    assembled = list((settings.output_root / "j1").rglob("assembled.txt"))
+    assert len(assembled) == 1
+    content = assembled[0].read_text(encoding="utf-8")
+    assert "clip.mp4" in content
+    assert "synthetic speech" in content, "the transcript should be woven in"
+
+
+def test_the_assembled_document_is_in_time_order(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "app.pipeline.stages.FasterWhisperTranscriber", lambda **kwargs: StubTranscriber()
+    )
+    from app.core.db import open_database
+
+    settings = Settings().with_output_root(tmp_path / "out")
+    connection = open_database(settings.output_root)
+    try:
+        source = make_video_with_silence(
+            tmp_path / "src" / "gaps.mp4",
+            speech_segments=((0.0, 2.0), (8.0, 10.0)),
+            duration_seconds=12.0,
+        )
+        _make_job(connection, settings, [source])
+    finally:
+        connection.close()
+
+    run_worker(settings, once=True)
+
+    content = next((settings.output_root / "j1").rglob("assembled.txt")).read_text("utf-8")
+    stamps = [
+        line[:8]
+        for line in content.splitlines()
+        if len(line) > 8 and line[2] == ":" and line[5] == ":"
+    ]
+    assert stamps == sorted(stamps), "entries must be in time order"
+
+
+def test_a_job_with_gaps_completes_with_gaps_rather_than_failing(tmp_path, monkeypatch):
+    """A shortfall must be visible, not hidden behind a green tick."""
+    from app.core.db import open_database
+    from app.providers.base import PermanentProviderError
+
+    class RefusingProvider:
+        def describe(self, request):
+            raise PermanentProviderError("the model refused")
+
+    settings = _visual_settings(tmp_path)
+    monkeypatch.setattr(
+        "app.pipeline.stages.FasterWhisperTranscriber", lambda **kwargs: StubTranscriber()
+    )
+    monkeypatch.setattr("app.providers.cloud.build_provider", lambda *a, **k: RefusingProvider())
+
+    connection = open_database(settings.output_root)
+    try:
+        source = make_video(tmp_path / "src" / "clip.mp4", duration_seconds=4.0)
+        _make_job(connection, settings, [source])
+    finally:
+        connection.close()
+
+    run_worker(settings, once=True)
+
+    connection = open_database(settings.output_root)
+    try:
+        job = connection.execute("SELECT status FROM jobs WHERE id='j1'").fetchone()
+        video = connection.execute("SELECT status FROM job_videos WHERE id='v1'").fetchone()
+    finally:
+        connection.close()
+
+    assert video["status"] == "completed_with_gaps"
+    assert job["status"] == "completed_with_gaps"
+    # And the document still exists — the frames and transcript are worth having.
+    assert list((settings.output_root / "j1").rglob("assembled.txt"))
+
+
+def test_the_handoff_folder_maps_pictures_to_files(tmp_path):
+    from app.pipeline.archive import HandoffSource, build_handoff
+
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    (frames / "000000_t000000.jpg").write_bytes(b"x")
+
+    assembled = tmp_path / "assembled.txt"
+    assembled.write_text("content", encoding="utf-8")
+
+    result = build_handoff(
+        tmp_path / "job",
+        [
+            HandoffSource(
+                display_name="clip.mp4",
+                sequence=0,
+                assembled_path=assembled,
+                frames_dir=frames,
+                frame_count=1,
+                duration_seconds=10.0,
+            )
+        ],
+        job_name="Test job",
+    )
+
+    readme = result.readme_path.read_text(encoding="utf-8")
+    assert "picture 47" in readme, "the README should explain the numbering"
+    assert "000046_" in readme
+    assert result.assembled_files
+    assert result.manifest_path.is_file()
+
+
+def test_the_handoff_references_frames_rather_than_copying_them(tmp_path):
+    # A 1,265-frame video is ~1.7 GB. Copying would double the job's disk cost.
+    from app.pipeline.archive import HandoffSource, build_handoff
+
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    (frames / "000000_t000000.jpg").write_bytes(b"x" * 1000)
+    assembled = tmp_path / "assembled.txt"
+    assembled.write_text("content", encoding="utf-8")
+
+    result = build_handoff(
+        tmp_path / "job",
+        [HandoffSource("clip.mp4", 0, assembled, frames_dir=frames, frame_count=1)],
+    )
+
+    # On a platform without symlinks this falls back to copying, which is
+    # correct — the handoff must always work.
+    assert result.frame_links
+    assert result.frame_links[0].exists()
+
+
+def test_a_portable_handoff_copies_the_frames(tmp_path):
+    from app.pipeline.archive import HandoffSource, build_handoff
+
+    frames = tmp_path / "frames"
+    frames.mkdir()
+    (frames / "000000_t000000.jpg").write_bytes(b"x")
+    assembled = tmp_path / "assembled.txt"
+    assembled.write_text("content", encoding="utf-8")
+
+    result = build_handoff(
+        tmp_path / "job",
+        [HandoffSource("clip.mp4", 0, assembled, frames_dir=frames, frame_count=1)],
+        portable=True,
+    )
+
+    assert result.copied_frames is True
+    assert (result.frame_links[0] / "000000_t000000.jpg").is_file()
+    assert not result.frame_links[0].is_symlink()

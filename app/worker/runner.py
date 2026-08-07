@@ -29,6 +29,7 @@ from app.core.logging import get_logger
 from app.core.redaction import redacted_exception_text
 from app.pipeline.stages import (
     StageContext,
+    run_assembly_stage,
     run_frames_stage,
     run_transcription_stage,
     run_visual_stage,
@@ -141,15 +142,15 @@ class Worker:
             self._set_job_status(job["id"], "transcribing")
             run_transcription_stage(context)
 
+            had_gaps = False
             if self.settings.visual_analysis.enabled:
                 self._set_video_status(video["id"], "analyzing")
                 self._set_job_status(job["id"], "analyzing")
-                visual = run_visual_stage(context)
-                if visual.has_gaps:
-                    # Gaps are visible, not fatal: the frames and transcript
-                    # are still worth having.
-                    self._set_video_status(video["id"], "completed_with_gaps")
-                    return True
+                had_gaps = run_visual_stage(context).has_gaps
+
+            # Assembly runs whatever happened above: a video with gaps, or with
+            # no descriptions at all, still deserves its assembled document.
+            run_assembly_stage(context, display_name=video["display_name"])
         except Exception as error:
             # One unreadable video must not abandon the others in the job.
             logger.error(
@@ -162,7 +163,9 @@ class Worker:
             )
             return False
 
-        self._set_video_status(video["id"], "completed")
+        # Gaps are visible, not fatal — the frames, transcript, and assembled
+        # document are all still worth having.
+        self._set_video_status(video["id"], "completed_with_gaps" if had_gaps else "completed")
         return True
 
     def _set_video_status(self, video_id: str, status: str) -> None:
@@ -180,10 +183,21 @@ class Worker:
     def _settle_job(self, job_id: str, *, had_failures: bool = False) -> None:
         """Give the job its final status.
 
-        'needs_attention' when something could not be finished, so the gap is
-        visible rather than buried inside an otherwise successful-looking job.
+        Three outcomes, deliberately distinct: 'needs_attention' when something
+        could not be finished at all, 'completed_with_gaps' when everything ran
+        but some pictures have no description, and 'completed' when neither
+        applies. Collapsing the middle case into 'completed' would hide a real
+        shortfall behind a green tick.
         """
-        status = "needs_attention" if had_failures else "completed"
+        if had_failures:
+            status = "needs_attention"
+        else:
+            with_gaps = self.connection.execute(
+                "SELECT 1 FROM job_videos WHERE job_id = ? AND status = 'completed_with_gaps'"
+                " LIMIT 1",
+                (job_id,),
+            ).fetchone()
+            status = "completed_with_gaps" if with_gaps else "completed"
         self.connection.execute(
             "UPDATE jobs SET status = ?, completed_at = ?, updated_at = ? WHERE id = ?",
             (status, utc_now(), utc_now(), job_id),

@@ -499,3 +499,130 @@ def artifact_paths(output_dir: Path) -> dict[str, Path]:
         "silence_windows": output_dir / SILENCE_FILENAME,
         "audio": output_dir / AUDIO_FILENAME,
     }
+
+
+# ── Stages 4-5: enrich and assemble ───────────────────────────────────────
+
+
+def _load_visual_descriptions(output_dir: Path) -> tuple[list[Any], int]:
+    """Read back the descriptions Stage 3 wrote, if any. Returns (list, gaps)."""
+    from app.pipeline.visual import VISUAL_RESULTS_FILENAME
+    from app.providers.base import FrameDescription
+
+    results_path = Path(output_dir) / VISUAL_RESULTS_FILENAME
+    if not results_path.is_file():
+        return [], 0
+
+    import json
+
+    payload = json.loads(results_path.read_text(encoding="utf-8"))
+    descriptions = [
+        FrameDescription(
+            **{k: v for k, v in entry.items() if k in FrameDescription.__annotations__}
+        )
+        for entry in payload.get("descriptions", [])
+    ]
+    return descriptions, int(payload.get("skip_count", 0))
+
+
+def _load_transcript_segments(output_dir: Path) -> list[Any]:
+    from app.pipeline.transcribe import TRANSCRIPT_FILENAME, TranscriptSegment
+
+    path = Path(output_dir) / TRANSCRIPT_FILENAME
+    if not path.is_file():
+        return []
+
+    import json
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return [
+        TranscriptSegment(
+            start_seconds=float(entry["start_seconds"]),
+            end_seconds=float(entry["end_seconds"]),
+            text=str(entry["text"]),
+            is_silence=bool(entry.get("is_silence", False)),
+        )
+        for entry in payload.get("segments", [])
+    ]
+
+
+def run_assembly_stage(context: StageContext, *, display_name: str = "") -> Path:
+    """Enrich deterministically, then write this video's `assembled.txt`."""
+    from app.pipeline.assemble import assemble_video, write_assembled
+    from app.pipeline.enrich import enrich
+
+    if _stage_completed(context.connection, context.job_video_id, "assemble"):
+        logger.info("Already assembled for %s; skipping", context.source_path.name)
+        return context.output_dir / "assembled.txt"
+
+    stage_run_id = _begin_stage(context, "assemble")
+
+    try:
+        info = probe(context.source_path)
+        transcript_segments = _load_transcript_segments(context.output_dir)
+        descriptions, gap_count = _load_visual_descriptions(context.output_dir)
+
+        silences: list[Any] = []
+        silence_path = context.output_dir / SILENCE_FILENAME
+        if silence_path.is_file():
+            import json
+
+            from app.pipeline.audio import SilenceWindow
+
+            payload = json.loads(silence_path.read_text(encoding="utf-8"))
+            silences = [
+                SilenceWindow(float(w["start_seconds"]), float(w["end_seconds"]))
+                for w in payload.get("windows", [])
+            ]
+
+        enrichment = enrich(descriptions, info.duration_seconds, silences)
+
+        content = assemble_video(
+            display_name=display_name or context.source_path.name,
+            duration_seconds=info.duration_seconds,
+            transcript_segments=transcript_segments,
+            descriptions=descriptions,
+            enrichment=enrichment,
+            interval_ms=context.interval_ms,
+            gap_count=gap_count,
+        )
+        assembled_path = write_assembled(context.output_dir, content)
+    except Exception as error:
+        message = redacted_exception_text(error)
+        _finish_stage(context, stage_run_id, status="failed", error=message)
+        _record_event(
+            context,
+            f"Could not put {context.source_path.name} together. {message}",
+            level="error",
+            kind="stage_failed",
+        )
+        raise
+
+    register_artifact(
+        context.connection,
+        output_root=context.output_root,
+        path=assembled_path,
+        kind="assembled",
+        job_id=context.job_id,
+        job_video_id=context.job_video_id,
+    )
+
+    _finish_stage(
+        context,
+        stage_run_id,
+        items_total=len(transcript_segments) + len(descriptions),
+        items_done=len(transcript_segments) + len(descriptions),
+        provenance={
+            "sections": len(enrichment.segments),
+            "emphasis": len(enrichment.emphasis),
+            "switches": len(enrichment.switches),
+            "gap_count": gap_count,
+        },
+    )
+    _record_event(
+        context,
+        f"Put {context.source_path.name} together in time order — "
+        f"{len(enrichment.segments)} section(s).",
+        kind="stage_completed",
+    )
+    return assembled_path
