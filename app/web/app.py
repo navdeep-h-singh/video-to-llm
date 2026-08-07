@@ -986,6 +986,199 @@ def create_app(settings: Settings) -> FastAPI:
 
     # ── Settings ──────────────────────────────────────────────────────────
 
+    def commit_settings(candidate: Settings) -> list[str]:
+        """Validate, write, and rebind — or report why not, having changed nothing.
+
+        Validation runs before the write so a configuration that would stop the
+        application from starting is refused rather than persisted: a settings
+        file that prevents start-up is far harder to recover from than a
+        rejected form.
+        """
+        from app.core.config import NonLoopbackAddressError, save_settings
+
+        try:
+            save_settings(candidate)
+        except (NonLoopbackAddressError, ValueError) as error:
+            return [str(error)]
+        except OSError as error:
+            return [f"The settings could not be saved: {error}"]
+
+        live["settings"] = candidate
+        return []
+
+    def output_root_blocker() -> str:
+        """Why the output folder cannot be repointed right now, or an empty string.
+
+        The worker holds a claim on the current root and the database lives
+        inside it. Moving the target while either is in use would leave a job
+        writing to one place and the interface reading another.
+        """
+        connection = connect()
+        if connection is None:
+            return ""
+        try:
+            if worker_state(connection).key == "running":
+                return (
+                    "Background processing is running. Stop it first — a worker "
+                    "writing into the old folder while the interface reads the new "
+                    "one would leave both wrong."
+                )
+            running = connection.execute(
+                "SELECT name FROM jobs WHERE status IN"
+                " ('preparing','transcribing','analyzing','waiting_retry') LIMIT 1"
+            ).fetchone()
+            if running is not None:
+                return (
+                    f"{running['name']} is still being processed. Wait for it to "
+                    "finish, or stop it, before changing where output goes."
+                )
+        finally:
+            connection.close()
+        return ""
+
+    @app.post("/settings/storage")
+    def save_storage_route(
+        request: Request, output_root: str = Form(""), port: int = Form(8712)
+    ) -> Response:
+        """Where output goes, and which port the interface answers on.
+
+        Repointing the output folder **moves nothing**. Work already done stays
+        where it is and new jobs go to the new place. Relocating a tree that can
+        run to tens of gigabytes, with a live database inside it, is a different
+        feature with its own failure modes — and quietly half-doing it would be
+        the worst of the options.
+        """
+        from dataclasses import replace
+
+        active = current()
+        problems: list[str] = []
+        chosen = output_root.strip()
+
+        candidate = replace(active, port=port)
+
+        if chosen and Path(chosen).expanduser() != active.output_root:
+            blocker = output_root_blocker()
+            if blocker:
+                problems.append(blocker)
+            else:
+                try:
+                    resolved = Path(chosen).expanduser().resolve()
+                    resolved.mkdir(parents=True, exist_ok=True)
+                except OSError as error:
+                    problems.append(f"That folder could not be used: {error}")
+                else:
+                    candidate = candidate.with_output_root(resolved)
+
+        if not problems:
+            problems = commit_settings(candidate)
+
+        if problems:
+            return _settings_page(request, problems=problems, draft=candidate)
+
+        # Create the database in the new folder straight away. Without it the
+        # screens read as an empty first-run install until the first job is
+        # made, which looks like the change lost the user's work.
+        if candidate.output_root is not None:
+            open_database(candidate.output_root).close()
+
+        return RedirectResponse("/settings?saved=1#where", status_code=303)
+
+    @app.post("/settings/transcription")
+    def save_transcription_route(
+        request: Request,
+        backend: str = Form("auto"),
+        model: str = Form("medium"),
+        language: str = Form("auto"),
+        silence_threshold_seconds: float = Form(3.0),
+    ) -> Response:
+        from dataclasses import replace
+
+        from app.core.config import TranscriptionSettings
+
+        active = current()
+        candidate = replace(
+            active,
+            transcription=TranscriptionSettings(
+                backend=backend.strip() or "auto",
+                model=model.strip() or "medium",
+                language=language.strip() or "auto",
+                silence_threshold_seconds=max(0.5, min(30.0, silence_threshold_seconds)),
+            ),
+        )
+
+        problems = commit_settings(candidate)
+        if problems:
+            return _settings_page(request, problems=problems, draft=candidate)
+        return RedirectResponse("/settings?saved=1#speech", status_code=303)
+
+    @app.post("/settings/collections")
+    def save_collection_defaults_route(
+        request: Request,
+        default_token_limit: int = Form(200000),
+        default_reserve_tokens: int = Form(20000),
+        allow_video_split: str = Form(""),
+    ) -> Response:
+        from dataclasses import replace
+
+        from app.core.config import CollectionSettings
+
+        active = current()
+        problems: list[str] = []
+        if default_reserve_tokens >= default_token_limit:
+            problems.append(
+                "Holding back that much leaves nothing for the content. Lower the "
+                "amount held back, or raise how much fits in one go."
+            )
+
+        candidate = replace(
+            active,
+            collections=CollectionSettings(
+                default_token_limit=max(1000, default_token_limit),
+                default_reserve_tokens=max(0, default_reserve_tokens),
+                allow_video_split=bool(allow_video_split),
+            ),
+        )
+
+        if not problems:
+            problems = commit_settings(candidate)
+        if problems:
+            return _settings_page(request, problems=problems, draft=candidate)
+        return RedirectResponse("/settings?saved=1#collections", status_code=303)
+
+    @app.post("/settings/advanced")
+    def save_advanced_route(
+        request: Request,
+        preset: str = Form("balanced"),
+        custom_interval_seconds: float = Form(2.0),
+        concurrency: int = Form(1),
+        poll_interval_seconds: int = Form(2),
+        max_retries: int = Form(3),
+        backoff_base_seconds: int = Form(5),
+    ) -> Response:
+        from dataclasses import replace
+
+        from app.core.config import SamplingSettings, WorkerSettings
+
+        active = current()
+        candidate = replace(
+            active,
+            sampling=SamplingSettings(
+                preset=preset,
+                custom_interval_seconds=custom_interval_seconds,
+            ),
+            ollama=replace(active.ollama, concurrency=max(1, min(8, concurrency))),
+            worker=WorkerSettings(
+                poll_interval_seconds=max(1, min(300, poll_interval_seconds)),
+                max_retries=max(0, min(10, max_retries)),
+                backoff_base_seconds=max(1, min(600, backoff_base_seconds)),
+            ),
+        )
+
+        problems = commit_settings(candidate)
+        if problems:
+            return _settings_page(request, problems=problems, draft=candidate)
+        return RedirectResponse("/settings?saved=1#advanced", status_code=303)
+
     @app.post("/settings")
     def save_settings_route(
         request: Request,
@@ -995,15 +1188,19 @@ def create_app(settings: Settings) -> FastAPI:
         endpoint: str = Form("http://127.0.0.1:11434"),
         batch_size: int = Form(1),
         acknowledged: str = Form(""),
+        hard_limit_usd: float = Form(25.0),
+        max_runtime_minutes: int = Form(0),
+        max_frames_per_run: int = Form(0),
     ) -> Response:
-        """Save the description settings.
+        """Save the description settings, including the spending cap.
 
-        Validation happens before the write, so a configuration that would stop
-        the application from starting is refused rather than persisted.
+        The cap was previously settable only by hand-editing TOML, which made
+        the one number that enforces the budget the hardest one to reach. It is
+        checked before a batch is sent, never after — see providers/costs.py.
         """
         from dataclasses import replace
 
-        from app.core.config import NonLoopbackAddressError, save_settings
+        from app.core.config import BudgetSettings, LocalGuardSettings
 
         active = current()
         want_enabled = bool(enabled) and provider != "none"
@@ -1015,6 +1212,17 @@ def create_app(settings: Settings) -> FastAPI:
                 enabled=want_enabled,
                 provider=provider,
                 model_id=model_id.strip(),
+                budget=BudgetSettings(
+                    hard_limit_usd=max(0.0, hard_limit_usd),
+                    # Carried through rather than offered as a choice: nothing
+                    # reads it yet, and a control that changes no behaviour is
+                    # the same lie as placeholder data.
+                    on_limit=active.visual_analysis.budget.on_limit,
+                ),
+                local_guard=LocalGuardSettings(
+                    max_runtime_minutes=max(0, max_runtime_minutes),
+                    max_frames_per_run=max(0, max_frames_per_run),
+                ),
             ),
             ollama=replace(
                 active.ollama,
@@ -1032,17 +1240,10 @@ def create_app(settings: Settings) -> FastAPI:
             )
 
         if not problems:
-            try:
-                save_settings(candidate)
-            except NonLoopbackAddressError as error:
-                problems.append(str(error))
-            except OSError as error:
-                problems.append(f"The settings could not be saved: {error}")
-            else:
-                live["settings"] = candidate
-                return RedirectResponse("/settings?saved=1", status_code=303)
-
-        return _settings_page(request, problems=problems, draft=candidate)
+            problems = commit_settings(candidate)
+        if problems:
+            return _settings_page(request, problems=problems, draft=candidate)
+        return RedirectResponse("/settings?saved=1#describing", status_code=303)
 
     @app.post("/settings/check-local")
     def check_local_route(request: Request) -> Response:
@@ -1095,6 +1296,9 @@ def create_app(settings: Settings) -> FastAPI:
             health=health,
             draft=draft or current(),
             saved=request.query_params.get("saved") == "1",
+            # Shown before the user tries, rather than as a rejection afterwards.
+            root_blocker=output_root_blocker(),
+            running_port=settings.port,
         )
 
     @app.exception_handler(500)

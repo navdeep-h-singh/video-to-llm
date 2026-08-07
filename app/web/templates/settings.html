@@ -14,6 +14,8 @@
 {% set problems = problems | default([], true) %}
 {% set health = health | default(none, true) %}
 {% set saved = saved | default(false, true) %}
+{% set root_blocker = root_blocker | default("", true) %}
+{% set running_port = running_port | default(settings.port, true) %}
 
 <div class="page-head">
   <div>
@@ -52,7 +54,7 @@
 </div>
 {% endif %}
 
-<div class="panel">
+<div class="panel" id="describing">
   <div class="panel-head">
     <h4 style="margin:0">Describing what is on screen</h4>
     <span class="tag tag-neutral">Optional</span>
@@ -141,6 +143,43 @@
       <span class="dot" aria-hidden="true"></span>
       <span>I understand this is experimental and will check low-confidence results</span>
     </label>
+
+    <h5 style="margin-top:var(--space-6)">Stopping a long local run</h5>
+    <p style="font-size:14px;margin:0">
+      A model on this computer costs nothing to run but can take hours. Set either
+      of these to stop a run before it gets there. Zero means no limit.
+    </p>
+    <div class="grid grid-2" style="margin-top:var(--space-3)">
+      <div class="field">
+        <label for="max-runtime">Stop after this many minutes</label>
+        <input class="input mono" id="max-runtime" name="max_runtime_minutes" type="number"
+               min="0" step="5" value="{{ draft.visual_analysis.local_guard.max_runtime_minutes }}">
+      </div>
+      <div class="field">
+        <label for="max-frames">Stop after this many pictures</label>
+        <input class="input mono" id="max-frames" name="max_frames_per_run" type="number"
+               min="0" step="100" value="{{ draft.visual_analysis.local_guard.max_frames_per_run }}">
+      </div>
+    </div>
+
+    <h5 style="margin-top:var(--space-6)">Your cap on what a service can charge</h5>
+    <p style="font-size:14px;margin:0">
+      Applies only to a service you have an account with. A model on this computer
+      has no provider charge. The cap is checked <strong>before</strong> anything is
+      sent, so the amount that would cross it is never spent.
+    </p>
+    <div class="grid grid-3" style="margin-top:var(--space-3)">
+      <div class="field">
+        <label for="hard-limit">Never spend more than</label>
+        <input class="input mono" id="hard-limit" name="hard_limit_usd" type="number"
+               min="0" step="1" value="{{ draft.visual_analysis.budget.hard_limit_usd }}"
+               aria-describedby="limit-help">
+        <p id="limit-help" class="text-muted" style="font-size:12px;margin-top:var(--space-1)">
+          US dollars, per job. Estimated from local pricing assumptions, not fetched
+          from anyone.
+        </p>
+      </div>
+    </div>
 
     <div style="margin-top:var(--space-4);display:flex;gap:var(--space-2)">
       <button class="btn btn-primary" type="submit">Save</button>
@@ -234,15 +273,223 @@
   </p>
 </div>
 
-<div class="panel">
+<div class="panel" id="where">
   <div class="panel-head"><h4 style="margin:0">Where things are kept</h4></div>
-  <dl style="display:grid;grid-template-columns:auto 1fr;gap:var(--space-1) var(--space-4);font-size:14px">
-    <dt class="text-muted">Output folder</dt>
-    <dd class="mono" style="margin:0">{{ settings.output_root or "not chosen yet" }}</dd>
+
+  <form method="post" action="/settings/storage">
+    <div class="field">
+      <label for="output-root">Output folder</label>
+      <input class="input mono" id="output-root" name="output_root"
+             value="{{ draft.output_root or '' }}"
+             {% if root_blocker %}disabled{% endif %}
+             aria-describedby="root-help">
+      <p id="root-help" class="text-muted" style="font-size:12px;margin-top:var(--space-1)">
+        {#
+          Repointing moves nothing, and says so. Relocating a tree that can run
+          to tens of gigabytes with a live database inside it is a different
+          feature with its own failure modes; quietly half-doing it would be the
+          worst of the options.
+        #}
+        Work already done stays exactly where it is. Changing this only decides
+        where <em>new</em> jobs are written.
+      </p>
+      {% if root_blocker %}
+        <p class="note" style="margin-top:var(--space-2)">{{ root_blocker }}</p>
+      {% endif %}
+    </div>
+
+    <div class="field" style="margin-top:var(--space-3);max-width:220px">
+      <label for="port">Port this interface answers on</label>
+      <input class="input mono" id="port" name="port" type="number" min="1" max="65535"
+             value="{{ draft.port }}" aria-describedby="port-help">
+      <p id="port-help" class="text-muted" style="font-size:12px;margin-top:var(--space-1)">
+        Takes effect the next time you start it &mdash; the address in your browser
+        does not change until then.
+      </p>
+    </div>
+
+    {% if draft.port != running_port %}
+      <p class="note" style="margin-top:var(--space-2)" role="status">
+        Saved as {{ draft.port }}. This server is still answering on
+        {{ running_port }} until it is stopped and started again.
+      </p>
+    {% endif %}
+
+    <div style="margin-top:var(--space-4)">
+      <button class="btn btn-primary" type="submit">Save</button>
+    </div>
+  </form>
+
+  <dl style="display:grid;grid-template-columns:auto 1fr;gap:var(--space-1) var(--space-4);
+             font-size:14px;margin-top:var(--space-6)">
     <dt class="text-muted">Reachable at</dt>
     <dd class="mono" style="margin:0">{{ settings.base_url }}</dd>
-    <dt class="text-muted">Speech to text</dt>
-    <dd style="margin:0">{{ settings.transcription.model }} on your processor</dd>
   </dl>
 </div>
+
+<div class="panel" id="speech">
+  <div class="panel-head"><h4 style="margin:0">Turning speech into text</h4></div>
+  <p style="font-size:14px;margin:0 0 var(--space-3)">
+    Runs on your processor. Nothing is sent anywhere, and the original timeline is
+    always preserved &mdash; silences are marked rather than removed.
+  </p>
+
+  <form method="post" action="/settings/transcription">
+    <div class="grid grid-2">
+      <div class="field">
+        <label for="speech-model">Which model?</label>
+        <input class="input mono" id="speech-model" name="model"
+               value="{{ draft.transcription.model }}" aria-describedby="speech-model-help">
+        <p id="speech-model-help" class="text-muted" style="font-size:12px;margin-top:var(--space-1)">
+          Larger is more accurate and slower. <span class="mono">medium</span> is the default.
+        </p>
+      </div>
+      <div class="field">
+        <label for="speech-language">Which language?</label>
+        <input class="input mono" id="speech-language" name="language"
+               value="{{ draft.transcription.language }}" aria-describedby="speech-language-help">
+        <p id="speech-language-help" class="text-muted" style="font-size:12px;margin-top:var(--space-1)">
+          <span class="mono">auto</span> works it out from the audio. Naming it is
+          faster and more reliable when you know it.
+        </p>
+      </div>
+    </div>
+
+    <div class="grid grid-2" style="margin-top:var(--space-3)">
+      <div class="field">
+        <label for="silence">Call it a silence after</label>
+        <input class="input mono" id="silence" name="silence_threshold_seconds" type="number"
+               min="0.5" max="30" step="0.5"
+               value="{{ draft.transcription.silence_threshold_seconds }}"
+               aria-describedby="silence-help">
+        <p id="silence-help" class="text-muted" style="font-size:12px;margin-top:var(--space-1)">
+          Seconds. Gaps at least this long are marked in the transcript.
+        </p>
+      </div>
+      <div class="field">
+        <label for="speech-backend">Which engine?</label>
+        <input class="input mono" id="speech-backend" name="backend"
+               value="{{ draft.transcription.backend }}" aria-describedby="backend-help">
+        <p id="backend-help" class="text-muted" style="font-size:12px;margin-top:var(--space-1)">
+          <span class="mono">auto</span> picks what is installed.
+        </p>
+      </div>
+    </div>
+
+    <div style="margin-top:var(--space-4)">
+      <button class="btn btn-primary" type="submit">Save</button>
+    </div>
+  </form>
+</div>
+
+<div class="panel" id="collections">
+  <div class="panel-head"><h4 style="margin:0">Collections</h4></div>
+  <p style="font-size:14px;margin:0 0 var(--space-3)">
+    What a new collection starts with. Every one of these can still be changed on
+    the collection itself.
+  </p>
+
+  <form method="post" action="/settings/collections">
+    <div class="grid grid-2">
+      <div class="field">
+        <label for="default-limit">How much fits in one go</label>
+        <input class="input mono" id="default-limit" name="default_token_limit" type="number"
+               min="1000" step="1000" value="{{ draft.collections.default_token_limit }}">
+      </div>
+      <div class="field">
+        <label for="default-reserve">Held back for your prompt and the reply</label>
+        <input class="input mono" id="default-reserve" name="default_reserve_tokens" type="number"
+               min="0" step="1000" value="{{ draft.collections.default_reserve_tokens }}">
+      </div>
+    </div>
+
+    <label class="radio" style="margin-top:var(--space-3)">
+      <input type="checkbox" name="allow_video_split" value="1"
+             {% if draft.collections.allow_video_split %}checked{% endif %}>
+      <span class="dot" aria-hidden="true"></span>
+      <span>Allow a very long video to be cut across parts by default</span>
+    </label>
+    <p class="text-muted" style="font-size:12px;margin-top:var(--space-1)">
+      Off is the safer default: a model reading half a video with no sign that it
+      is half will summarise it as though it were whole.
+    </p>
+
+    <div style="margin-top:var(--space-4)">
+      <button class="btn btn-primary" type="submit">Save</button>
+    </div>
+  </form>
+</div>
+
+<details class="panel" id="advanced">
+  <summary style="cursor:pointer;font-family:var(--font-heading);font-weight:800;font-size:15px">
+    Advanced
+  </summary>
+  <p style="font-size:14px;margin:var(--space-3) 0">
+    Sensible defaults already. Worth changing only if something is going wrong, or
+    if you know why you want to.
+  </p>
+
+  <form method="post" action="/settings/advanced">
+    <h5 style="margin-top:0">Pictures, by default</h5>
+    <p class="text-muted" style="font-size:12px;margin:0 0 var(--space-2)">
+      Each job chooses its own when you start it. This is only what it starts on.
+    </p>
+    <div class="grid grid-2">
+      <div class="field">
+        <label for="preset">How often a picture is taken</label>
+        <select class="input" id="preset" name="preset">
+          {% for value, label in [("detailed", "Close look — every second"),
+                                  ("balanced", "Balanced — every 2 seconds"),
+                                  ("economy", "Light — every 3 seconds"),
+                                  ("custom", "Custom…")] %}
+            <option value="{{ value }}"
+                    {% if draft.sampling.preset == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field">
+        <label for="custom-interval">If custom, how many seconds apart</label>
+        <input class="input mono" id="custom-interval" name="custom_interval_seconds"
+               type="number" min="0.5" max="10" step="0.5"
+               value="{{ draft.sampling.custom_interval_seconds }}">
+      </div>
+    </div>
+
+    <h5 style="margin-top:var(--space-6)">Background processing</h5>
+    <div class="grid grid-3">
+      <div class="field">
+        <label for="poll">Check for new work every</label>
+        <input class="input mono" id="poll" name="poll_interval_seconds" type="number"
+               min="1" max="300" value="{{ draft.worker.poll_interval_seconds }}">
+      </div>
+      <div class="field">
+        <label for="retries">Try a failed step this many times</label>
+        <input class="input mono" id="retries" name="max_retries" type="number"
+               min="0" max="10" value="{{ draft.worker.max_retries }}">
+      </div>
+      <div class="field">
+        <label for="backoff">Wait this long before retrying</label>
+        <input class="input mono" id="backoff" name="backoff_base_seconds" type="number"
+               min="1" max="600" value="{{ draft.worker.backoff_base_seconds }}">
+      </div>
+    </div>
+
+    <h5 style="margin-top:var(--space-6)">A model on this computer</h5>
+    <div class="grid grid-3">
+      <div class="field">
+        <label for="concurrency">Requests at a time</label>
+        <input class="input mono" id="concurrency" name="concurrency" type="number"
+               min="1" max="8" value="{{ draft.ollama.concurrency }}"
+               aria-describedby="concurrency-help">
+        <p id="concurrency-help" class="text-muted" style="font-size:12px;margin-top:var(--space-1)">
+          1 is the safe default. More needs plenty of memory.
+        </p>
+      </div>
+    </div>
+
+    <div style="margin-top:var(--space-4)">
+      <button class="btn btn-primary" type="submit">Save</button>
+    </div>
+  </form>
+</details>
 {% endblock %}

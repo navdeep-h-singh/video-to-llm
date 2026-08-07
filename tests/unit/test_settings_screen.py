@@ -451,3 +451,200 @@ def test_the_error_page_does_not_leak_the_exception():
     assert secret not in response.text
     assert "LEAKED" not in response.text
     assert "Traceback" not in response.text
+
+
+# ── The rest of the configuration ─────────────────────────────────────────
+#
+# Most of what the product can do was previously reachable only by hand-editing
+# TOML — including where output goes and the cap on what a service can charge.
+
+
+CONFIGURABLE_FIELDS = [
+    "output_root",
+    "port",
+    "model",  # transcription
+    "language",
+    "silence_threshold_seconds",
+    "backend",
+    "hard_limit_usd",  # the spending cap
+    "max_runtime_minutes",  # local guard
+    "max_frames_per_run",
+    "default_token_limit",  # collection defaults
+    "default_reserve_tokens",
+    "allow_video_split",
+    "preset",  # sampling default
+    "custom_interval_seconds",
+    "concurrency",
+    "poll_interval_seconds",
+    "max_retries",
+    "backoff_base_seconds",
+]
+
+
+@pytest.mark.parametrize("field", CONFIGURABLE_FIELDS)
+def test_every_setting_is_reachable_without_editing_a_file(client, field):
+    """A setting only the TOML can reach is a setting most users do not have."""
+    assert f'name="{field}"' in client.get("/settings").text
+
+
+def test_saving_one_section_leaves_the_others_alone(client, settings_path):
+    """Each form carries only its own fields, and each route replaces only what
+    it was given. A route that rebuilt the whole config from its own form
+    defaults would silently reset every setting the user could not see."""
+    client.post(
+        "/settings/transcription",
+        data={
+            "backend": "auto",
+            "model": "large-v3",
+            "language": "en",
+            "silence_threshold_seconds": "5",
+        },
+    )
+    client.post(
+        "/settings/collections",
+        data={"default_token_limit": "500000", "default_reserve_tokens": "50000"},
+    )
+    client.post(
+        "/settings",
+        data={
+            "enabled": "1",
+            "provider": "ollama_local",
+            "model_id": "qwen2.5vl:7b",
+            "endpoint": "http://127.0.0.1:11434",
+            "batch_size": "1",
+            "hard_limit_usd": "10",
+            "max_runtime_minutes": "0",
+            "max_frames_per_run": "0",
+        },
+    )
+
+    written = settings_path.read_text(encoding="utf-8")
+    assert 'model = "large-v3"' in written, "the describing form reset the speech model"
+    assert "default_token_limit = 500000" in written, (
+        "the describing form reset the collection defaults"
+    )
+    assert 'model_id = "qwen2.5vl:7b"' in written
+
+
+def test_the_spending_cap_can_be_set_from_the_interface(client, settings_path):
+    """It is the one number that enforces the budget, and it was the hardest one
+    to reach."""
+    client.post(
+        "/settings",
+        data={
+            "enabled": "1",
+            "provider": "ollama_local",
+            "model_id": "qwen2.5vl:7b",
+            "endpoint": "http://127.0.0.1:11434",
+            "batch_size": "1",
+            "hard_limit_usd": "7.5",
+            "max_runtime_minutes": "0",
+            "max_frames_per_run": "0",
+        },
+    )
+    assert "hard_limit_usd = 7.5" in settings_path.read_text(encoding="utf-8")
+
+
+def test_a_setting_nothing_reads_is_not_offered_as_a_choice(client, settings_path):
+    """`on_limit` is stored but no code path consults it. A control that changes
+    no behaviour is the same lie as placeholder data, so it is carried through
+    rather than presented — and carrying it through means saving must not
+    quietly rewrite it either."""
+    assert 'name="on_limit"' not in client.get("/settings").text
+
+    client.post(
+        "/settings",
+        data={
+            "enabled": "",
+            "provider": "none",
+            "model_id": "",
+            "batch_size": "1",
+            "endpoint": "http://127.0.0.1:11434",
+            "hard_limit_usd": "25",
+            "max_runtime_minutes": "0",
+            "max_frames_per_run": "0",
+        },
+    )
+    assert 'on_limit = "stop_and_ask"' in settings_path.read_text(encoding="utf-8")
+
+
+def test_the_collection_reserve_cannot_swallow_the_whole_budget(client, settings_path):
+    response = client.post(
+        "/settings/collections",
+        data={"default_token_limit": "10000", "default_reserve_tokens": "10000"},
+    )
+    assert "nothing for the content" in response.text
+
+
+# ── The output folder ─────────────────────────────────────────────────────
+
+
+def test_the_output_folder_can_be_repointed(client, settings_path, tmp_path):
+    elsewhere = tmp_path / "somewhere-else"
+
+    client.post("/settings/storage", data={"output_root": str(elsewhere), "port": "8712"})
+
+    assert f'output_root = "{elsewhere}"' in settings_path.read_text(encoding="utf-8")
+
+
+def test_repointing_the_output_folder_moves_nothing(client, settings, tmp_path):
+    """Relocating a tree that can run to tens of gigabytes, with a live database
+    inside it, is a different feature. Half-doing it silently is the worst
+    option available."""
+    original = settings.output_root
+    (original / "j1").mkdir(parents=True, exist_ok=True)
+    (original / "j1" / "assembled.txt").write_text("real work", "utf-8")
+
+    client.post(
+        "/settings/storage",
+        data={"output_root": str(tmp_path / "elsewhere"), "port": "8712"},
+    )
+
+    assert (original / "j1" / "assembled.txt").read_text("utf-8") == "real work"
+
+
+def test_the_new_output_folder_is_usable_straight_away(client, settings_path, tmp_path):
+    """Without a database there, every screen reads as a fresh install — which
+    looks exactly like the change having thrown the user's work away."""
+    from app.core.db import database_path
+
+    elsewhere = tmp_path / "fresh"
+    client.post("/settings/storage", data={"output_root": str(elsewhere), "port": "8712"})
+
+    assert database_path(elsewhere).exists()
+
+
+def test_the_output_folder_is_not_repointed_while_a_job_runs(client, settings, tmp_path):
+    """The worker holds a claim on the current root and the database lives
+    inside it. Moving the target mid-job leaves the worker writing to one place
+    and the interface reading another."""
+    from app.core.db import open_database, utc_now
+
+    connection = open_database(settings.output_root)
+    connection.execute(
+        "INSERT INTO jobs (id, name, status, output_root, created_at, updated_at)"
+        " VALUES (?,?,?,?,?,?)",
+        ("j1", "Long job", "transcribing", str(settings.output_root), utc_now(), utc_now()),
+    )
+    connection.commit()
+    connection.close()
+
+    response = client.post(
+        "/settings/storage",
+        data={"output_root": str(tmp_path / "elsewhere"), "port": "8712"},
+    )
+
+    # The refusal names the job that is in the way, and nothing was created at
+    # the new location.
+    assert "Long job" in response.text
+    assert not (tmp_path / "elsewhere").exists()
+
+
+def test_a_port_change_says_it_needs_a_restart(client, settings_path):
+    """`server.port` cannot take effect without one, and a screen that implied
+    otherwise would send the user to an address nothing is listening on."""
+    client.post("/settings/storage", data={"output_root": "", "port": "9001"})
+
+    body = client.get("/settings").text
+    assert "9001" in body
+    assert "started again" in body or "next time you start" in body
