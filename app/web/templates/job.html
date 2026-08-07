@@ -1,6 +1,19 @@
 {% extends "base.html" %}
 {% from "_macros.html" import status, bar %}
-{% block title %}{{ job.name }} — Video to LLM{% endblock %}
+{% block title %}{{ job.name }} — Video to LLM{% if job.status in ("draft", "ready", "preparing", "transcribing", "analyzing",
+                     "waiting_retry", "paused") %}
+<div class="panel">
+  <div class="panel-head"><h4 style="margin:0">Stop this job</h4></div>
+  <p style="font-size:14px">
+    Stopping keeps everything already finished. Pictures, transcripts and
+    descriptions that exist stay exactly where they are — nothing is thrown away.
+  </p>
+  <form method="post" action="/jobs/{{ job.id }}/cancel">
+    <button class="btn btn-secondary" type="submit">Stop this job</button>
+  </form>
+</div>
+{% endif %}
+{% endblock %}
 {% block content %}
 <div class="page-head">
   <div>
@@ -9,6 +22,15 @@
   </div>
   <div class="actions">
     {{ status(job_status) }}
+    {% if job.status in ("ready", "preparing", "transcribing", "analyzing", "waiting_retry") %}
+      <form method="post" action="/jobs/{{ job.id }}/pause" style="display:inline">
+        <button class="btn btn-secondary" type="submit">Pause</button>
+      </form>
+    {% elif job.status == "paused" %}
+      <form method="post" action="/jobs/{{ job.id }}/resume" style="display:inline">
+        <button class="btn btn-primary" type="submit">Start again</button>
+      </form>
+    {% endif %}
     <a class="btn btn-secondary" href="/jobs/{{ job.id }}/review">Review</a>
     <a class="btn btn-secondary" href="/jobs/{{ job.id }}/outputs">Files</a>
   </div>

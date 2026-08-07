@@ -8,17 +8,26 @@
   </div>
 </div>
 
+{% if problems %}
+<div class="panel" style="border-left:3px solid var(--color-accent)" role="alert">
+  <h4 style="margin:0 0 var(--space-2)">This job cannot start yet</h4>
+  <ul style="margin:0;padding-left:var(--space-4);font-size:14px">
+    {% for problem in problems %}<li>{{ problem }}</li>{% endfor %}
+  </ul>
+</div>
+{% endif %}
+
 <form class="panel" method="post" action="/jobs">
   <div class="field">
     <label for="job-name">What is this job called?</label>
-    <input class="input" id="job-name" name="name" placeholder="Session review — 14 Feb" required>
+    <input class="input" id="job-name" name="name" value="{{ submitted_name or '' }}" placeholder="Session review — 14 Feb" required>
   </div>
 
   <div class="field" style="margin-top:var(--space-4)">
     <label for="job-paths">Which videos? One full path per line, up to twenty.</label>
     <textarea class="input" id="job-paths" name="paths" rows="6"
       aria-describedby="paths-help"
-      placeholder="/path/to/capture_0914.mp4&#10;/path/to/screen_1145.mov"></textarea>
+      placeholder="/path/to/capture_0914.mp4&#10;/path/to/screen_1145.mov">{{ submitted_paths or "" }}</textarea>
     <p id="paths-help" class="text-muted" style="font-size:12px;margin-top:var(--space-1)">
       .mp4, .mov and .webm. They are read where they are and never changed.
       The order you list them in is the order they are processed.

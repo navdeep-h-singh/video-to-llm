@@ -50,6 +50,19 @@ target-version = "py311"
 select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "PTH", "RUF", "S"]
 ignore = ["S101", "S603", "S607", "N818"]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI declares form, query, and path parameters by calling these in the
+# argument default. B008 exists to catch accidental shared mutable defaults,
+# which this idiom is not.
+extend-immutable-calls = [
+    "fastapi.Form",
+    "fastapi.Query",
+    "fastapi.Path",
+    "fastapi.Body",
+    "fastapi.Depends",
+    "fastapi.Header",
+]
+
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S", "E501"]
 "scripts/**" = ["S"]

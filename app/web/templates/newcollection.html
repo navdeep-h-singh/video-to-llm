@@ -18,6 +18,14 @@
   {% endfor %}
 </ol>
 
+{% if problems %}
+<div class="panel" style="border-left:3px solid var(--color-accent)" role="alert">
+  <ul style="margin:0;padding-left:var(--space-4);font-size:14px">
+    {% for problem in problems %}<li>{{ problem }}</li>{% endfor %}
+  </ul>
+</div>
+{% endif %}
+
 <form class="panel" method="post" action="/collections">
   <div class="field">
     <label for="collection-name">What is this collection called?</label>
