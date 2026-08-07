@@ -137,7 +137,15 @@ HOME_PATH_EXEMPT = {
 BIND_SCAN_EXEMPT = {
     "scripts/pre_publish_audit.py",
     ".gitleaks.toml",
+    "docs/SECURITY.md",
 }
+
+# The bind check alone is skipped under tests/. A test that proves "0.0.0.0" is
+# rejected has to name "0.0.0.0", so flagging it would mean deleting the test
+# that enforces the boundary. Scoped deliberately: the secret and home-path
+# scans still apply to tests, because there is no comparable reason for a test
+# to contain a real key or someone's home directory.
+BIND_SCAN_EXEMPT_PREFIXES = ("tests/",)
 
 TEXT_SUFFIXES = {
     ".py",
@@ -215,7 +223,7 @@ def audit() -> list[str]:
                     f"{path}:{line}: absolute path into a home directory ({match.group(0)!r})"
                 )
 
-        if path not in BIND_SCAN_EXEMPT:
+        if path not in BIND_SCAN_EXEMPT and not path.startswith(BIND_SCAN_EXEMPT_PREFIXES):
             match = NON_LOOPBACK_BIND.search(text)
             if match:
                 line = text[: match.start()].count("\n") + 1
