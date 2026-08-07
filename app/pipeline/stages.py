@@ -12,6 +12,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from app.core.artifacts import register_artifact
 from app.core.config import Settings
@@ -99,14 +100,16 @@ def _finish_stage(
     provenance: dict | None = None,
     backend: str | None = None,
     fell_back_from: str | None = None,
+    provider: str | None = None,
+    model_id: str | None = None,
     error: str | None = None,
 ) -> None:
     import json
 
     context.connection.execute(
         "UPDATE stage_runs SET status = ?, items_total = ?, items_done = ?,"
-        " provenance_json = ?, backend = ?, fell_back_from = ?, error_message = ?,"
-        " finished_at = ?, updated_at = ? WHERE id = ?",
+        " provenance_json = ?, backend = ?, fell_back_from = ?, provider = ?,"
+        " model_id = ?, error_message = ?, finished_at = ?, updated_at = ? WHERE id = ?",
         (
             status,
             items_total,
@@ -114,6 +117,8 @@ def _finish_stage(
             json.dumps(provenance or {}),
             backend,
             fell_back_from,
+            provider,
+            model_id,
             error,
             utc_now(),
             utc_now(),
@@ -335,6 +340,154 @@ def run_transcription_stage(
         f"{len(silences)} quiet stretch(es) marked.",
         kind="stage_completed",
     )
+    return result
+
+
+# ── Stage 3 ───────────────────────────────────────────────────────────────
+
+
+def run_visual_stage(context: StageContext, *, provider: Any = None) -> Any:
+    """Describe the extracted frames. Off by default and never blocking.
+
+    A job with descriptions switched off never reaches this function, and a
+    failure here produces gaps rather than losing the frames and transcript
+    that already succeeded.
+    """
+    from app.pipeline.visual import (
+        DEFAULT_PROMPT,
+        VisualStageResult,
+        build_batches,
+        load_frame_records,
+        run_visual_analysis,
+        write_visual_results,
+    )
+    from app.providers.cloud import build_provider
+    from app.providers.costs import BudgetTracker
+
+    settings = context.settings
+    visual = settings.visual_analysis
+
+    if not visual.enabled or visual.provider == "none":
+        return VisualStageResult()
+
+    if _stage_completed(context.connection, context.job_video_id, "visual"):
+        logger.info("Descriptions already exist for %s; skipping", context.source_path.name)
+        return VisualStageResult()
+
+    manifest = context.output_dir / MANIFEST_FILENAME
+    if not manifest.is_file():
+        raise FileNotFoundError(
+            f"no frame manifest for {context.source_path.name}; "
+            "pictures must be taken before they can be described"
+        )
+
+    api_frames_dir = context.output_dir / "frames_api"
+    stage_run_id = _begin_stage(context, "visual")
+
+    try:
+        records = load_frame_records(manifest)
+
+        if visual.provider == "ollama_local":
+            from app.providers.ollama_local import resolve_batch_size
+
+            batch_size = resolve_batch_size(settings.ollama.batch_size, preflight_passed=True)
+            active = provider or build_provider(
+                "ollama_local",
+                endpoint=settings.ollama.endpoint,
+                model_id=visual.model_id,
+                batch_size=batch_size,
+            )
+        else:
+            batch_size = 20
+            active = provider or build_provider(visual.provider, model_id=visual.model_id)
+
+        requests = build_batches(
+            records,
+            api_frames_dir,
+            batch_size=batch_size,
+            model_id=visual.model_id,
+            prompt=DEFAULT_PROMPT,
+        )
+
+        budget = BudgetTracker(limit_usd=visual.budget.hard_limit_usd, provider=visual.provider)
+
+        result = run_visual_analysis(
+            context.connection,
+            stage_run_id=stage_run_id,
+            job_id=context.job_id,
+            job_video_id=context.job_video_id,
+            output_root=context.output_root,
+            output_dir=context.output_dir,
+            provider=active,
+            requests=requests,
+            budget=budget,
+        )
+
+        results_path, gaps_path = write_visual_results(
+            context.output_dir, result, source_filename=context.source_path.name
+        )
+    except Exception as error:
+        message = redacted_exception_text(error)
+        _finish_stage(context, stage_run_id, status="failed", error=message)
+        _record_event(
+            context,
+            f"Could not describe the pictures from {context.source_path.name}. {message}",
+            level="error",
+            kind="stage_failed",
+        )
+        raise
+
+    register_artifact(
+        context.connection,
+        output_root=context.output_root,
+        path=results_path,
+        kind="visual_results",
+        job_id=context.job_id,
+        job_video_id=context.job_video_id,
+    )
+    if gaps_path is not None:
+        register_artifact(
+            context.connection,
+            output_root=context.output_root,
+            path=gaps_path,
+            kind="gaps",
+            job_id=context.job_id,
+            job_video_id=context.job_video_id,
+        )
+
+    _finish_stage(
+        context,
+        stage_run_id,
+        status=result.status,
+        items_total=len(records),
+        items_done=len(result.descriptions),
+        provider=visual.provider,
+        model_id=visual.model_id,
+        provenance={
+            "batches_sent": result.batches_sent,
+            "batches_reused": result.batches_skipped,
+            "cost": result.cost_label,
+            "stopped_on_budget": result.stopped_on_budget,
+        },
+    )
+
+    if result.has_gaps:
+        _record_event(
+            context,
+            f"Described {len(result.descriptions):,} pictures from "
+            f"{context.source_path.name}. {len(result.skips)} could not be described "
+            "and are listed in gaps.txt.",
+            level="warning",
+            kind="stage_completed_with_gaps",
+        )
+    else:
+        _record_event(
+            context,
+            f"Described {len(result.descriptions):,} pictures from "
+            f"{context.source_path.name}. {result.cost_label}.",
+            kind="stage_completed",
+        )
+
     return result
 
 

@@ -27,7 +27,12 @@ from app.core.locks import (
 )
 from app.core.logging import get_logger
 from app.core.redaction import redacted_exception_text
-from app.pipeline.stages import StageContext, run_frames_stage, run_transcription_stage
+from app.pipeline.stages import (
+    StageContext,
+    run_frames_stage,
+    run_transcription_stage,
+    run_visual_stage,
+)
 from app.worker.reconcile import reconcile
 
 logger = get_logger(__name__)
@@ -135,6 +140,16 @@ class Worker:
             self._set_video_status(video["id"], "transcribing")
             self._set_job_status(job["id"], "transcribing")
             run_transcription_stage(context)
+
+            if self.settings.visual_analysis.enabled:
+                self._set_video_status(video["id"], "analyzing")
+                self._set_job_status(job["id"], "analyzing")
+                visual = run_visual_stage(context)
+                if visual.has_gaps:
+                    # Gaps are visible, not fatal: the frames and transcript
+                    # are still worth having.
+                    self._set_video_status(video["id"], "completed_with_gaps")
+                    return True
         except Exception as error:
             # One unreadable video must not abandon the others in the job.
             logger.error(

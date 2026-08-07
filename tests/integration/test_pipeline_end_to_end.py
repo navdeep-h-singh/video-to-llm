@@ -325,3 +325,175 @@ def test_a_restarted_job_resumes_rather_than_redoing_work(settings, db, tmp_path
         "SELECT COUNT(*) FROM stage_runs WHERE stage='frames'"
     ).fetchone()[0]
     assert frame_runs_after == frame_runs_before, "completed stages must not run again"
+
+
+# ── Stage 3 through the worker ────────────────────────────────────────────
+
+
+class StubVisualProvider:
+    """Describes every frame it is given, at no cost."""
+
+    def __init__(self):
+        self.batches: list[list[int]] = []
+
+    def describe(self, request):
+        from app.providers.base import AnalysisResult, FrameDescription
+
+        self.batches.append([f.index for f in request.frames])
+        return AnalysisResult(
+            descriptions=[
+                FrameDescription(
+                    index=f.index,
+                    visual_description="a synthetic test pattern",
+                    confidence="High",
+                )
+                for f in request.frames
+            ],
+            provider="stub",
+            model_id="stub-model",
+            cost_usd=None,
+        )
+
+
+def _visual_settings(tmp_path):
+    from app.core.config import Settings, VisualAnalysisSettings
+
+    return Settings(
+        visual_analysis=VisualAnalysisSettings(
+            enabled=True, provider="ollama_local", model_id="qwen2.5vl:7b"
+        )
+    ).with_output_root(tmp_path / "out")
+
+
+def test_descriptions_are_produced_and_written(tmp_path, monkeypatch):
+    import json
+
+    from app.core.db import open_database
+    from app.pipeline.stages import run_visual_stage
+
+    settings = _visual_settings(tmp_path)
+    connection = open_database(settings.output_root)
+    try:
+        source = make_video(tmp_path / "src" / "clip.mp4", duration_seconds=4.0)
+        _make_job(connection, settings, [source])
+
+        context = StageContext(
+            connection=connection,
+            settings=settings,
+            job_id="j1",
+            job_video_id="v1",
+            source_path=source.path,
+            output_dir=settings.output_root / "j1" / "v1",
+            interval_ms=2000,
+        )
+        run_frames_stage(context, make_api_copies=True)
+
+        stub = StubVisualProvider()
+        result = run_visual_stage(context, provider=stub)
+
+        assert result.descriptions, "descriptions should have been produced"
+        assert result.has_gaps is False
+        assert result.cost_label == "No provider API charge"
+
+        payload = json.loads(
+            (context.output_dir / "visual_results.json").read_text(encoding="utf-8")
+        )
+        assert payload["description_count"] == len(result.descriptions)
+        assert not (context.output_dir / "gaps.txt").exists()
+    finally:
+        connection.close()
+
+
+def test_a_local_provider_uses_small_batches(tmp_path):
+    from app.core.db import open_database
+    from app.pipeline.stages import run_visual_stage
+
+    settings = _visual_settings(tmp_path)
+    connection = open_database(settings.output_root)
+    try:
+        source = make_video(tmp_path / "src" / "clip.mp4", duration_seconds=6.0)
+        _make_job(connection, settings, [source])
+
+        context = StageContext(
+            connection=connection,
+            settings=settings,
+            job_id="j1",
+            job_video_id="v1",
+            source_path=source.path,
+            output_dir=settings.output_root / "j1" / "v1",
+            interval_ms=2000,
+        )
+        run_frames_stage(context, make_api_copies=True)
+
+        stub = StubVisualProvider()
+        run_visual_stage(context, provider=stub)
+
+        # Never cloud-sized. Batching 20 frames against a local 7B model
+        # exhausts memory long before it saves any time.
+        assert all(len(batch) <= 2 for batch in stub.batches), stub.batches
+    finally:
+        connection.close()
+
+
+def test_descriptions_are_not_produced_again_on_resume(tmp_path):
+    from app.core.db import open_database
+    from app.pipeline.stages import run_visual_stage
+
+    settings = _visual_settings(tmp_path)
+    connection = open_database(settings.output_root)
+    try:
+        source = make_video(tmp_path / "src" / "clip.mp4", duration_seconds=4.0)
+        _make_job(connection, settings, [source])
+
+        context = StageContext(
+            connection=connection,
+            settings=settings,
+            job_id="j1",
+            job_video_id="v1",
+            source_path=source.path,
+            output_dir=settings.output_root / "j1" / "v1",
+            interval_ms=2000,
+        )
+        run_frames_stage(context, make_api_copies=True)
+        run_visual_stage(context, provider=StubVisualProvider())
+
+        second = StubVisualProvider()
+        run_visual_stage(context, provider=second)
+
+        assert second.batches == [], "a completed visual stage must not run again"
+    finally:
+        connection.close()
+
+
+def test_a_local_only_job_makes_no_provider_call(tmp_path, monkeypatch):
+    """The default path: descriptions off means Stage 3 never runs at all."""
+    from app.core.db import open_database
+    from app.pipeline.stages import run_visual_stage
+
+    settings = Settings().with_output_root(tmp_path / "out")  # visual disabled
+    connection = open_database(settings.output_root)
+    try:
+        source = make_video(tmp_path / "src" / "clip.mp4", duration_seconds=4.0)
+        _make_job(connection, settings, [source])
+
+        context = StageContext(
+            connection=connection,
+            settings=settings,
+            job_id="j1",
+            job_video_id="v1",
+            source_path=source.path,
+            output_dir=settings.output_root / "j1" / "v1",
+            interval_ms=2000,
+        )
+        run_frames_stage(context, make_api_copies=False)
+
+        def explode(*args, **kwargs):
+            raise AssertionError("a provider was built for a local-only job")
+
+        monkeypatch.setattr("app.providers.cloud.build_provider", explode)
+        result = run_visual_stage(context)
+
+        assert result.descriptions == []
+        assert not (context.output_dir / "visual_results.json").exists()
+    finally:
+        connection.close()
