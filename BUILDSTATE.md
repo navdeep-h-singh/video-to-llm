@@ -3,8 +3,8 @@
 > Read this file, `docs/DECISIONS.md`, `BUILDPLAN.md`, and `git status` before
 > doing any work in a new session.
 
-**Current phase:** 4 — Provider protocol and adapters
-**Overall:** 3 of 9 phases complete
+**Current phase:** 5 — Enrichment, assembly, archives, imports, versioned reruns
+**Overall:** 4 of 9 phases complete
 
 ## Environment (verified 2026-08-06)
 
@@ -55,10 +55,23 @@
 - `app/pipeline/stages.py` — stage orchestration, skip-if-complete
 - `app/worker/runner.py` — real `process_job` / `process_video`
 
+### Phase 4 — Providers ✅ (commits `a49f59c`, `b9845cd`)
+- `app/providers/base.py` — contract, strict schema, alignment validation,
+  tolerant JSON extraction, `Unknown` preservation
+- `app/credentials/store.py` — keyring → env, never a plaintext fallback
+- `app/providers/ollama_local.py` — loopback-only, no credential, small batches,
+  health probe with `Vision capability not verified`
+- `app/providers/cloud.py` — Anthropic, Google, OpenAI, OpenAI-compatible
+- `app/providers/costs.py` — versioned estimates, budget checked before sending
+- `app/providers/retry.py` — bounded backoff, one corrective schema retry,
+  skips, fallback policy that never auto-moves local → cloud
+
 ## Tests
 
-**367 passing**, 0 failing. ruff clean, mypy clean (28 files), pre-publish
-audit clean (60 tracked files), smoke test green (9 checks).
+**562 passing**, 0 failing. ruff clean, mypy clean (34 files), pre-publish
+audit clean (78 tracked files), smoke test green (9 checks).
+Plus 5 live Ollama tests (opt-in marker `live_ollama`, deselected in CI) that
+pass against the real Ollama 0.32.6 + qwen2.5vl:7b on this machine.
 
 - `tests/unit/test_redaction.py` — 37
 - `tests/unit/test_repository_hygiene.py` — 14
@@ -72,6 +85,10 @@ audit clean (60 tracked files), smoke test green (9 checks).
 - `tests/unit/test_transcription.py` — 38
 - `tests/unit/test_preflight.py` — 34
 - `tests/integration/test_pipeline_end_to_end.py` — 12 (real FFmpeg, stub model)
+- `tests/unit/test_providers_base.py` — 64
+- `tests/unit/test_ollama_local.py` — 43
+- `tests/unit/test_cloud_providers.py` — 60
+- `tests/unit/test_credentials.py` — 28
 
 ## Failures / blockers
 
@@ -95,38 +112,29 @@ None.
 
 ## Next action
 
-Phase 4 — provider protocol and adapters. Build in this order:
+Stage 3 is built but **not yet wired into the pipeline**. Do that first, then
+Phase 5.
 
-1. `app/providers/base.py` — `VisualAnalysisProvider` protocol: normalized
-   request in, normalized schema out. Strict output fields per spec §6:
-   `index`, `timeframe`, `currency_pair`, `indicators_and_states`,
-   `exact_action`, `visible_text`, `visual_description`, `setup_type`,
-   `confidence`. Preserve `Unknown`; never invent values.
-2. `app/credentials/store.py` — keyring first, process env second, **never a
-   plaintext fallback**. Register every value read with `register_secret()`.
-3. `app/providers/ollama_local.py` — loopback-only guard reusing
-   `is_loopback_host`, no credential field at all, default batch 1 (2 after
-   preflight, 3–4 advanced override only), concurrency 1, `Check local model`
-   health probe reporting reachability/version/model/vision capability, and the
-   `Vision capability not verified` path requiring acknowledgement.
-4. `app/providers/anthropic.py`, `google.py`, `openai.py`, `openai_compatible.py`
-   — cloud batching up to 20, exact returned IDX alignment validation.
-5. `app/providers/costs.py` — versioned local estimation, hard budget stop
-   before a new paid batch. Local reports `No provider API charge`, never
-   `$0.00`.
-6. `app/providers/retry.py` — bounded backoff for transient errors, exactly one
-   corrective schema-format retry for invalid JSON, skip records on permanent
-   failure, `Completed with gaps`.
-7. Wire Stage 3 into `app/pipeline/stages.py` and the worker.
+1. `app/pipeline/visual.py` — Stage 3 orchestration: build `AnalysisRequest`
+   batches from `frames_manifest.json`, run through `call_with_retries`, persist
+   each batch atomically before marking it completed (never re-send a completed
+   batch), enforce `BudgetTracker.check_before_send`, write skip records, and
+   settle as `completed_with_gaps` when any frame was skipped.
+2. Wire it into `app/pipeline/stages.py` and `Worker.process_video`, gated on
+   `settings.visual_analysis.enabled`.
+3. `app/pipeline/enrich.py` — deterministic local enrichment only (emphasis,
+   timeframe switches, time-window segment classification). No external text
+   model.
+4. `app/pipeline/assemble.py` — chronological `assembled.txt` per video;
+   `master_assembled.txt` only for multi-video jobs in confirmed order.
+5. `app/pipeline/archive.py` — per-video permanent archive + per-job
+   `analysis_input` with a frame-mapping README.
+6. `app/services/importer.py` — replace the honest stub with the real import.
+7. Versioned reruns: video, batch range, low-confidence only, fallback output,
+   new prompt/schema/model. Never overwrite prior expensive output.
 
-All tests use mocks (`respx` is already a dev dependency). No paid call is ever
-made. Add `tests/integration/test_live_ollama.py` behind the `live_ollama`
-marker — CI deselects it; it can run locally since Ollama 0.32.6 and
-`qwen2.5vl:7b` are installed on this machine.
-
-Critical invariants to test: never auto-fall-back from Local Ollama to cloud;
-never re-send a completed batch; loopback-only endpoints; no credential field
-for Ollama; keys never reach disk.
+Test: 1/2/20-video assembly, ordering, imports, rerun version immutability, and
+that a completed paid batch is never re-sent on resume.
 
 ## Continuation prompt
 
