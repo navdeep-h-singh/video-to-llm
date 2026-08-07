@@ -4,9 +4,9 @@ Owns jobs. The interface controls and observes them, but closing the browser
 never stops work here, and a job resumes safely after a crash, a restart, or a
 suspended laptop.
 
-Stage execution arrives in later phases; the loop, the ownership guarantee, and
-the recovery behaviour are established here so everything built on top inherits
-them.
+Runs stages 1 and 2 for every video in a job, in the order the user confirmed.
+A video that cannot be read marks itself and the job as needing attention rather
+than abandoning the videos that follow it.
 """
 
 from __future__ import annotations
@@ -27,6 +27,7 @@ from app.core.locks import (
 )
 from app.core.logging import get_logger
 from app.core.redaction import redacted_exception_text
+from app.pipeline.stages import StageContext, run_frames_stage, run_transcription_stage
 from app.worker.reconcile import reconcile
 
 logger = get_logger(__name__)
@@ -79,18 +80,100 @@ class Worker:
         ).fetchone()
 
     def process_job(self, job: sqlite3.Row) -> None:
-        """Advance one job by one step.
-
-        Stage execution lands in Phase 3. Until then a claimed job is marked
-        'preparing' and left there: reconciliation returns it to 'ready' on the
-        next start, so the loop is exercised without pretending work happened.
-        """
+        """Run every stage for every video in one job, in confirmed order."""
         logger.info("Picked up job %s (%s)", job["id"][:8], job["name"])
         self.connection.execute(
             "UPDATE jobs SET status = 'preparing', started_at = COALESCE(started_at, ?),"
             " updated_at = ? WHERE id = ?",
             (utc_now(), utc_now(), job["id"]),
         )
+
+        videos = self.connection.execute(
+            "SELECT * FROM job_videos WHERE job_id = ? AND is_active_version = 1"
+            " AND status NOT IN ('completed', 'completed_with_gaps', 'cancelled', 'skipped')"
+            " ORDER BY sequence",
+            (job["id"],),
+        ).fetchall()
+
+        if not videos:
+            self._settle_job(job["id"])
+            return
+
+        failed = 0
+        for video in videos:
+            if self.stopping:
+                logger.info("Stopping before video %s as requested.", video["sequence"] + 1)
+                return
+            if not self.process_video(job, video):
+                failed += 1
+
+        self._settle_job(job["id"], had_failures=failed > 0)
+
+    def process_video(self, job: sqlite3.Row, video: sqlite3.Row) -> bool:
+        """Run stages 1 and 2 for one video. False when it could not finish."""
+        interval_ms = job["frame_interval_ms"] or self.settings.sampling.interval_ms()
+        output_dir = self.output_root / job["id"] / f"{video['id']}_v{video['version']}"
+
+        context = StageContext(
+            connection=self.connection,
+            settings=self.settings,
+            job_id=job["id"],
+            job_video_id=video["id"],
+            source_path=Path(video["source_path"]),
+            output_dir=output_dir,
+            interval_ms=interval_ms,
+        )
+
+        try:
+            self._set_video_status(video["id"], "preparing")
+            self._set_job_status(job["id"], "preparing")
+            run_frames_stage(
+                context,
+                make_api_copies=self.settings.visual_analysis.enabled,
+            )
+
+            self._set_video_status(video["id"], "transcribing")
+            self._set_job_status(job["id"], "transcribing")
+            run_transcription_stage(context)
+        except Exception as error:
+            # One unreadable video must not abandon the others in the job.
+            logger.error(
+                "Video %s failed: %s", video["display_name"], redacted_exception_text(error)
+            )
+            self.connection.execute(
+                "UPDATE job_videos SET status = 'needs_attention', error_message = ?,"
+                " updated_at = ? WHERE id = ?",
+                (redacted_exception_text(error), utc_now(), video["id"]),
+            )
+            return False
+
+        self._set_video_status(video["id"], "completed")
+        return True
+
+    def _set_video_status(self, video_id: str, status: str) -> None:
+        self.connection.execute(
+            "UPDATE job_videos SET status = ?, updated_at = ? WHERE id = ?",
+            (status, utc_now(), video_id),
+        )
+
+    def _set_job_status(self, job_id: str, status: str) -> None:
+        self.connection.execute(
+            "UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?",
+            (status, utc_now(), job_id),
+        )
+
+    def _settle_job(self, job_id: str, *, had_failures: bool = False) -> None:
+        """Give the job its final status.
+
+        'needs_attention' when something could not be finished, so the gap is
+        visible rather than buried inside an otherwise successful-looking job.
+        """
+        status = "needs_attention" if had_failures else "completed"
+        self.connection.execute(
+            "UPDATE jobs SET status = ?, completed_at = ?, updated_at = ? WHERE id = ?",
+            (status, utc_now(), utc_now(), job_id),
+        )
+        logger.info("Job %s finished as %s", job_id[:8], status)
 
     def run(self, *, once: bool = False) -> None:
         report = reconcile(self.connection, self.output_root)

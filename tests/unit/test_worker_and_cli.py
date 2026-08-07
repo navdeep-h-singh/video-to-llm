@@ -54,14 +54,39 @@ def test_worker_refuses_to_start_without_an_output_root():
     assert run_worker(Settings(), once=True) == 1
 
 
-def test_worker_picks_up_a_ready_job(settings, db):
+def test_a_ready_job_with_no_videos_settles_as_completed(settings, db):
+    # Nothing to do is a finished job, not a stuck one.
     db.execute(
         "INSERT INTO jobs (id, name, status, output_root, created_at, updated_at)"
         " VALUES (?,?,?,?,?,?)",
         ("j1", "Ready job", "ready", str(settings.output_root), utc_now(), utc_now()),
     )
     run_worker(settings, once=True)
-    assert db.execute("SELECT status FROM jobs WHERE id='j1'").fetchone()["status"] == "preparing"
+    row = db.execute("SELECT status, completed_at FROM jobs WHERE id='j1'").fetchone()
+    assert row["status"] == "completed"
+    assert row["completed_at"] is not None
+
+
+def test_a_video_that_cannot_be_read_marks_the_job_as_needing_attention(settings, db):
+    # The gap must be visible rather than buried in an otherwise green job.
+    db.execute(
+        "INSERT INTO jobs (id, name, status, output_root, created_at, updated_at)"
+        " VALUES (?,?,?,?,?,?)",
+        ("j1", "Bad source", "ready", str(settings.output_root), utc_now(), utc_now()),
+    )
+    db.execute(
+        "INSERT INTO job_videos (id, job_id, source_path, display_name, sequence,"
+        " status, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+        ("v1", "j1", "/does/not/exist.mp4", "exist.mp4", 0, "pending", utc_now(), utc_now()),
+    )
+    run_worker(settings, once=True)
+
+    assert db.execute("SELECT status FROM jobs WHERE id='j1'").fetchone()["status"] == (
+        "needs_attention"
+    )
+    video = db.execute("SELECT status, error_message FROM job_videos WHERE id='v1'").fetchone()
+    assert video["status"] == "needs_attention"
+    assert video["error_message"]
 
 
 def test_worker_ignores_jobs_that_are_not_ready(settings, db):
@@ -116,9 +141,15 @@ def test_worker_reconciles_before_taking_new_work(settings, db):
         ("j1", "Interrupted", "analyzing", str(settings.output_root), utc_now(), utc_now()),
     )
     run_worker(settings, once=True)
-    # analyzing -> ready by reconciliation, then claimed in the same pass.
+    # 'analyzing' -> 'ready' by reconciliation, then claimed and run in the same
+    # pass. With no videos attached it settles as completed.
     status = db.execute("SELECT status FROM jobs WHERE id='j1'").fetchone()["status"]
-    assert status in {"ready", "preparing"}
+    assert status == "completed"
+
+    recovered = db.execute(
+        "SELECT message FROM events WHERE job_id='j1' AND kind='recovered'"
+    ).fetchone()
+    assert recovered is not None, "the interruption should be recorded for the user"
 
 
 # ── Doctor ────────────────────────────────────────────────────────────────
