@@ -298,7 +298,9 @@ def test_provider_copies_are_not_made_when_descriptions_are_off(
     _make_job(db, settings, [source])
     run_worker(settings, once=True)
 
-    video_dir = next((settings.output_root / "j1").iterdir())
+    # The job directory also holds provenance.json and analysis_input/, so pick
+    # the video directory by the artifact that identifies one.
+    video_dir = next(p.parent for p in (settings.output_root / "j1").rglob("frames_manifest.json"))
     assert (video_dir / FRAMES_DIRNAME).is_dir()
     api_dir = video_dir / API_FRAMES_DIRNAME
     assert not api_dir.exists() or not list(api_dir.glob("*.jpg"))

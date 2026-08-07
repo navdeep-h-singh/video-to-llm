@@ -189,6 +189,9 @@ class Worker:
         applies. Collapsing the middle case into 'completed' would hide a real
         shortfall behind a green tick.
         """
+        if not had_failures:
+            self._finalize(job_id)
+
         if had_failures:
             status = "needs_attention"
         else:
@@ -203,6 +206,30 @@ class Worker:
             (status, utc_now(), utc_now(), job_id),
         )
         logger.info("Job %s finished as %s", job_id[:8], status)
+
+    def _finalize(self, job_id: str) -> None:
+        """Write the job-level outputs. A failure here must not lose the videos."""
+        from app.pipeline.finalize import finalize_job
+
+        job = self.connection.execute("SELECT name FROM jobs WHERE id = ?", (job_id,)).fetchone()
+        try:
+            result = finalize_job(
+                self.connection,
+                job_id=job_id,
+                job_name=job["name"] if job else job_id,
+                output_root=self.output_root,
+            )
+        except Exception as error:
+            # The per-video work is already durably on disk and is the expensive
+            # part. Losing the handoff folder is recoverable; losing the job is
+            # not, so this is logged rather than raised.
+            logger.error(
+                "Could not gather up job %s: %s", job_id[:8], redacted_exception_text(error)
+            )
+            return
+
+        for warning in result.warnings:
+            logger.warning("%s", warning)
 
     def run(self, *, once: bool = False) -> None:
         report = reconcile(self.connection, self.output_root)
