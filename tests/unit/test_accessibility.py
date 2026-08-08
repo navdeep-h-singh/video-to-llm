@@ -366,3 +366,45 @@ def test_every_screen_using_the_cards_has_one_chosen_to_begin_with(client, path)
     if 'class="pick"' not in body:
         pytest.skip(f"{path} does not use the cards")
     assert "checked" in body
+
+
+# ── The title is a title ──────────────────────────────────────────────────
+
+
+def test_no_screen_hides_its_controls_inside_the_title(client):
+    """A `{% block title %}` left open swallows whatever follows it.
+
+    The job screen did exactly that: an unclosed `{% if %}` pulled three panels
+    — stop, rename and remove — into `<title>`, so the tab carried 1,705
+    characters of markup and the screen offered no way to stop, rename or delete
+    a job. Every route behind those controls existed and was tested; not one of
+    them could be reached.
+
+    Checked on every screen, because the failure is invisible from the page
+    itself — the markup is present in the response, just not where anyone can
+    use it.
+    """
+    for path in [
+        *SCREENS,
+        "/jobs/j1/review",
+        "/jobs/j1/outputs",
+        "/jobs/j1/rerun",
+        "/jobs/j1/frames",
+    ]:
+        body = client.get(path).text
+        found = re.search(r"<title>(.*?)</title>", body, re.DOTALL)
+        assert found, f"{path} has no title"
+        title = found.group(1)
+
+        assert "<" not in title, f"{path} has markup inside its <title>"
+        assert len(title) < 120, f"{path} has a {len(title)}-character title"
+
+
+def test_the_job_screen_offers_its_controls_on_the_page(client):
+    """The three that were lost. Named individually so a future block edit that
+    swallows them again fails with the name of what went missing."""
+    body = client.get("/jobs/j1").text
+    main = re.search(r"<main.*?>(.*)</main>", body, re.DOTALL).group(1)
+
+    for control in ("Stop this job", "Rename", "Remove this job"):
+        assert control in main, f"{control!r} is not on the visible page"

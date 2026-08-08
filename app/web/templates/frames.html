@@ -1,6 +1,18 @@
 {% extends "base.html" %}
 {% from "_macros.html" import empty %}
 {% block title %}All pictures — Video to LLM{% endblock %}
+{#
+  Defaulted, like the other screens. The route has an empty-state branch for a
+  job with no videos, and it passed none of these — so the one case the guard
+  existed to handle was the one that crashed the page.
+#}
+{% set frames = frames | default([], true) %}
+{% set frame_count = frame_count | default(0, true) %}
+{% set total_pages = total_pages | default(1, true) %}
+{% set page_no = page_no | default(0, true) %}
+{% set start_index = start_index | default(0, true) %}
+{% set chosen = chosen | default(none, true) %}
+{% set frames_relative = frames_relative | default("", true) %}
 {% block content %}
 <div class="page-head">
   <div>

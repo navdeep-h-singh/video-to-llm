@@ -626,6 +626,15 @@ def create_app(settings: Settings) -> FastAPI:
                 (Path(chosen["output_dir"]) / "frames").as_posix() if chosen["output_dir"] else ""
             )
 
+            # The numbered copies are only made when a job is going to describe
+            # its pictures. Offering the toggle without them gives a broken
+            # image and a caption describing something that never happened.
+            has_numbered = bool(
+                video_dir is not None
+                and (video_dir / "frames_api").is_dir()
+                and any((video_dir / "frames_api").glob("*.jpg"))
+            )
+
             return page(
                 request,
                 "review.html",
@@ -650,6 +659,7 @@ def create_app(settings: Settings) -> FastAPI:
                 nearby=nearby,
                 transcript_count=len(transcript),
                 frames_relative=frames_relative,
+                has_numbered=has_numbered,
             )
         finally:
             connection.close()
@@ -1665,7 +1675,7 @@ def create_app(settings: Settings) -> FastAPI:
         try:
             job = connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
             if job is None:
-                return page(request, "notfound.html", "dashboard")
+                return page(request, "notfound.html", "dashboard", what="job")
 
             videos = connection.execute(
                 "SELECT * FROM job_videos WHERE job_id = ? AND is_active_version = 1"
@@ -1673,7 +1683,7 @@ def create_app(settings: Settings) -> FastAPI:
                 (job_id,),
             ).fetchall()
             if not videos:
-                return page(request, "notfound.html", "dashboard")
+                return page(request, "notfound.html", "dashboard", what="video")
 
             chosen = next((v for v in videos if v["id"] == video), videos[0])
 

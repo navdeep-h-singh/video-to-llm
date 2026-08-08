@@ -90,41 +90,63 @@ def _audio_filter(duration: float) -> str:
     )
 
 
-def _chart_filter(width: int, height: int, bars: int = 16) -> str:
-    """An animated bar chart, drawn with boxes.
+#: The chart is drawn this many screens wide and then scrolled across, which is
+#: what gives every frame a different picture.
+CANVAS_MULTIPLIER = 3
+
+
+def _bar_height(index: int, height: int) -> int:
+    """One bar's height, worked out here rather than in a filter expression.
+
+    Computed in Python and emitted as a literal. The obvious approach — a
+    time-varying expression in ``drawbox`` — does not work, and fails silently:
+    in ``drawbox`` the variable ``t`` is the box *thickness*, not the timestamp,
+    so ``sin(t*0.6)`` is a constant and the whole chart comes out as a still
+    image. That produced a sixty-second clip whose twenty sampled frames were
+    two distinct pictures, and nothing anywhere reported a problem.
+    """
+    from math import sin
+
+    mix = abs(sin(index * 0.5)) * 0.62 + abs(sin(index * 0.9 + 1.3)) * 0.38
+    return int(mix * height * 0.42) + int(height * 0.05)
+
+
+def _chart_filter(width: int, height: int) -> str:
+    """A scrolling bar chart: a wide static drawing, moved past the window.
 
     Deliberately not ``testsrc2``. Colour bars are recognisably a test pattern
     and give a description model nothing to describe, so a demo built on them
-    shows the pipeline running and the output saying nothing. Bars that move
-    frame to frame give every sampled picture something genuinely different in
-    it.
+    shows the pipeline running and the output saying nothing.
+
+    The movement comes from ``crop``, whose ``t`` really is the timestamp. The
+    chart is drawn once across a canvas several screens wide and the window
+    travels along it, which is both cheap and what a live chart actually looks
+    like.
     """
+    canvas = width * CANVAS_MULTIPLIER
     baseline = int(height * 0.78)
-    left = int(width * 0.05)
-    slot = (width - 2 * left) // bars
+    slot = max(24, int(width * 0.055))
     bar_width = max(8, int(slot * 0.62))
+    bars = canvas // slot
 
     parts = [f"drawgrid=w={slot}:h={int(height / 11)}:t=1:color=0xffffff@0.07"]
 
     for index in range(bars):
-        # A sum of two waves at unrelated speeds, so the chart never visibly
-        # repeats over the length of the clip.
-        magnitude = (
-            f"(abs(sin(t*0.6+{index * 0.5}))*0.62+abs(sin(t*0.23+{index * 0.9}))*0.38)"
-            f"*{int(height * 0.42)}+{int(height * 0.05)}"
-        )
+        magnitude = _bar_height(index, height)
         parts.append(
-            f"drawbox=x={left + index * slot}:y='{baseline}-({magnitude})':"
-            f"w={bar_width}:h='{magnitude}':"
+            f"drawbox=x={index * slot}:y={baseline - magnitude}:"
+            f"w={bar_width}:h={magnitude}:"
             f"color={BAR_COLOURS[index % len(BAR_COLOURS)]}@0.85:t=fill"
         )
 
+    # Travel the whole extra width exactly once over the clip, so nothing
+    # repeats and the last frame is as different from the first as possible.
+    travel = canvas - width
+    parts.append(f"crop={width}:{height}:x='min(t/{SAMPLE_DURATION_SECONDS},1)*{travel}':y=0")
+
+    # Drawn after the crop so they stay put on screen while the chart moves.
     parts.append(f"drawbox=x=0:y={baseline}:w={width}:h=2:color=0xffffff@0.35:t=fill")
-    # A cursor sweeping the width, so even a still frame reads as a moment in a
-    # recording rather than a static picture.
-    parts.append(
-        f"drawbox=x='mod(t*{width // 30},{width})':y=0:w=2:h={height}:color=0xffffff@0.5:t=fill"
-    )
+    parts.append(f"drawbox=x={width // 2}:y=0:w=2:h={height}:color=0xffffff@0.5:t=fill")
     return ",".join(parts)
 
 
@@ -202,7 +224,8 @@ def generate_sample(output_root: Path, *, force: bool = False) -> SampleClip:
         "-f",
         "lavfi",
         "-i",
-        f"color=c={BACKGROUND}:s={SAMPLE_WIDTH}x{SAMPLE_HEIGHT}"
+        # Wide, because the chart is drawn once and scrolled past the window.
+        f"color=c={BACKGROUND}:s={SAMPLE_WIDTH * CANVAS_MULTIPLIER}x{SAMPLE_HEIGHT}"
         f":r={SAMPLE_FPS}:d={SAMPLE_DURATION_SECONDS}",
     ]
 

@@ -162,3 +162,85 @@ def test_a_build_that_cannot_draw_the_chart_still_gets_a_clip(tmp_path, monkeypa
     assert clip.kind == "plain"
     assert clip.path.stat().st_size > 0
     assert "does not have" in clip.detail
+
+
+# ── The clip has to actually move ─────────────────────────────────────────
+
+
+@needs_ffmpeg
+def test_the_sample_is_not_the_same_picture_sixty_times(tmp_path):
+    """The failure this catches was completely silent.
+
+    The first version animated the bars with a time-varying expression in
+    `drawbox` — but `drawbox`'s `t` is the box *thickness*, not the timestamp,
+    so every expression was a constant and the clip came out as a still image.
+    FFmpeg reported nothing, the file played, the pipeline ran, and twenty
+    sampled pictures were two distinct images. A sample whose whole job is to
+    show the product working must be seen to change.
+    """
+    import hashlib
+    import subprocess as sub
+
+    clip = generate_sample(tmp_path)
+    frames = tmp_path / "probe"
+    frames.mkdir()
+
+    sub.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+            "-i",
+            str(clip.path),
+            "-vf",
+            "fps=1/3",
+            "-frames:v",
+            "12",
+            str(frames / "f_%03d.jpg"),
+        ],
+        check=True,
+        timeout=120,
+    )
+
+    digests = {hashlib.sha1(p.read_bytes()).hexdigest() for p in frames.glob("*.jpg")}
+    assert len(digests) >= 10, f"only {len(digests)} distinct pictures in the whole clip"
+
+
+@needs_ffmpeg
+def test_the_chart_moves_rather_than_flickering(tmp_path):
+    """Neighbouring frames differ, and so do distant ones.
+
+    Two separate ways to be wrong: a still image, and a pattern that repeats
+    every few seconds so a viewer sees the same thing again and again.
+    """
+    import hashlib
+    import subprocess as sub
+
+    clip = generate_sample(tmp_path)
+    frames = tmp_path / "probe"
+    frames.mkdir()
+    sub.run(
+        [
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+            "-i",
+            str(clip.path),
+            "-vf",
+            "fps=1/5",
+            "-frames:v",
+            "10",
+            str(frames / "f_%03d.jpg"),
+        ],
+        check=True,
+        timeout=120,
+    )
+
+    ordered = sorted(frames.glob("*.jpg"))
+    digests = [hashlib.sha1(p.read_bytes()).hexdigest() for p in ordered]
+
+    assert digests[0] != digests[1], "consecutive pictures are identical"
+    assert digests[0] != digests[-1], "the clip ends where it started"
+    assert len(set(digests)) == len(digests), "the picture repeats within the clip"

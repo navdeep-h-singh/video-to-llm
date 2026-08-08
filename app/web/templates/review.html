@@ -169,6 +169,13 @@
   </span>
 </nav>
 
+{#
+  Only offered when the numbered copies were actually made — they are written
+  only for a job that is going to describe its pictures. Shown regardless, the
+  toggle produced a broken image and a caption describing a thing that never
+  happened to this video.
+#}
+{% if has_numbered | default(false, true) %}
 <div class="panel" style="margin-top:var(--space-4)">
   <div class="seg" role="group" aria-label="Which picture to show">
     <label class="seg-opt"><input type="radio" name="frameview" value="clean" checked>Clean picture</label>
@@ -179,6 +186,7 @@
     your exports.
   </p>
 </div>
+{% endif %}
 {% endif %}
 {% endblock %}
 

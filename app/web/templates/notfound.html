@@ -1,5 +1,11 @@
 {% extends "base.html" %}
 {% block title %}Not found — Video to LLM{% endblock %}
+{#
+  Defaulted, like every other template context here. A caller that forgets it
+  otherwise renders "That  could not be found" — a sentence with a hole in it,
+  on the screen a lost user has already reached.
+#}
+{% set what = what | default("page", true) %}
 {% block content %}
 <div class="empty">
   <h2>That {{ what }} could not be found</h2>

@@ -1060,3 +1060,60 @@ def test_a_machine_without_ffmpeg_is_told_rather_than_failing(client, monkeypatc
 
     assert response.status_code == 200
     assert "FFmpeg is not installed" in response.text
+
+
+# ── Every screen survives the states that are easy to forget ──────────────
+#
+# The contact sheet crashed on a job with no videos: the route had an
+# empty-state branch and passed the template none of the values it needed, so
+# the one case the guard existed for was the one that broke. These sweep the
+# awkward states across every screen rather than trusting each to be handled.
+
+
+ALL_SCREENS = [
+    "/",
+    "/launch",
+    "/jobs/new",
+    "/imports",
+    "/settings",
+    "/collections",
+    "/collections/new",
+    "/jobs/{job}",
+    "/jobs/{job}/review",
+    "/jobs/{job}/outputs",
+    "/jobs/{job}/frames",
+    "/jobs/{job}/rerun",
+]
+
+
+@pytest.mark.parametrize("template", ALL_SCREENS)
+def test_every_screen_renders_for_a_job_with_no_videos(client, db, template):
+    """A job can exist with nothing under it — preflight rejected everything, or
+    it was created and never started."""
+    db.execute(
+        "INSERT INTO jobs (id, name, status, output_root, created_at, updated_at)"
+        " VALUES (?,?,?,?,?,?)",
+        ("bare", "Nothing under it", "ready", "/out", utc_now(), utc_now()),
+    )
+    db.commit()
+
+    response = client.get(template.format(job="bare"))
+    assert response.status_code == 200, f"{template} broke on a job with no videos"
+
+
+@pytest.mark.parametrize("template", ALL_SCREENS)
+def test_every_screen_renders_when_the_output_folder_is_empty(client, db, template):
+    """The rows exist and the artifacts do not — the state after someone moves
+    or deletes the output folder by hand, which the reconciler is built for."""
+    seed_job(db)
+    db.commit()
+
+    response = client.get(template.format(job="j1"))
+    assert response.status_code == 200, f"{template} broke with no artifacts on disk"
+
+
+@pytest.mark.parametrize("template", ALL_SCREENS)
+def test_every_screen_renders_on_a_completely_empty_install(client, template):
+    """No jobs at all. The first thing anyone sees."""
+    response = client.get(template.format(job="does-not-exist"))
+    assert response.status_code == 200, f"{template} broke on an empty install"

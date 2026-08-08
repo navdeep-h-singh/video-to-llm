@@ -1,44 +1,13 @@
 {% extends "base.html" %}
 {% from "_macros.html" import status, bar %}
-{% block title %}{{ job.name }} — Video to LLM{% if job.status in ("draft", "ready", "preparing", "transcribing", "analyzing",
-                     "waiting_retry", "paused") %}
-<div class="panel">
-  <div class="panel-head"><h4 style="margin:0">Stop this job</h4></div>
-  <p style="font-size:14px">
-    Stopping keeps everything already finished. Pictures, transcripts and
-    descriptions that exist stay exactly where they are — nothing is thrown away.
-  </p>
-  <form method="post" action="/jobs/{{ job.id }}/cancel">
-    <button class="btn btn-secondary" type="submit">Stop this job</button>
-  </form>
-</div>
-{% endif %}
-<div class="panel">
-  <div class="panel-head"><h4 style="margin:0">This job</h4></div>
-  <form method="post" action="/jobs/{{ job.id }}/rename" class="inline-form">
-    <label for="rename" class="visually-hidden">Rename this job</label>
-    <input class="input" id="rename" name="name" value="{{ job.name }}" style="max-width:340px">
-    <button class="btn btn-secondary" type="submit">Rename</button>
-  </form>
-
-  <details style="margin-top:var(--space-4)">
-    <summary style="cursor:pointer;font-size:14px">Remove this job</summary>
-    <form method="post" action="/jobs/{{ job.id }}/delete" style="margin-top:var(--space-3)">
-      <p style="font-size:14px">
-        Removing the job takes it off this list. By default the pictures,
-        transcripts and documents it produced are left exactly where they are —
-        they are the expensive part and the list entry is not.
-      </p>
-      <label class="radio" style="margin-bottom:var(--space-3)">
-        <input type="checkbox" name="remove_files" value="1">
-        <span class="dot" aria-hidden="true"></span>
-        <span>Also delete everything this job produced{% if total_size %} ({{ total_size }}){% endif %}</span>
-      </label>
-      <div><button class="btn btn-secondary" type="submit">Remove this job</button></div>
-    </form>
-  </details>
-</div>
-{% endblock %}
+{#
+  The title is a title. Everything below it used to live inside this block: an
+  unclosed `{% if %}` swallowed three panels — stop, rename and remove — into
+  `<title>`, so the tab carried 1,705 characters of markup and the job screen
+  offered no way to stop, rename or delete a job at all. The controls existed,
+  were tested at the route, and could not be reached.
+#}
+{% block title %}{{ job.name }} — Video to LLM{% endblock %}
 {% block content %}
 <div class="page-head">
   <div>
@@ -109,5 +78,45 @@
   {% else %}
     <p class="text-muted">Nothing recorded yet.</p>
   {% endif %}
+</div>
+
+{% if job.status in ("draft", "ready", "preparing", "transcribing", "analyzing",
+                     "waiting_retry", "paused") %}
+<div class="panel">
+  <div class="panel-head"><h4 style="margin:0">Stop this job</h4></div>
+  <p style="font-size:14px">
+    Stopping keeps everything already finished. Pictures, transcripts and
+    descriptions that exist stay exactly where they are — nothing is thrown away.
+  </p>
+  <form method="post" action="/jobs/{{ job.id }}/cancel">
+    <button class="btn btn-secondary" type="submit">Stop this job</button>
+  </form>
+</div>
+{% endif %}
+
+<div class="panel">
+  <div class="panel-head"><h4 style="margin:0">This job</h4></div>
+  <form method="post" action="/jobs/{{ job.id }}/rename" class="inline-form">
+    <label for="rename" class="visually-hidden">Rename this job</label>
+    <input class="input" id="rename" name="name" value="{{ job.name }}" style="max-width:340px">
+    <button class="btn btn-secondary" type="submit">Rename</button>
+  </form>
+
+  <details style="margin-top:var(--space-4)">
+    <summary style="cursor:pointer;font-size:14px">Remove this job</summary>
+    <form method="post" action="/jobs/{{ job.id }}/delete" style="margin-top:var(--space-3)">
+      <p style="font-size:14px">
+        Removing the job takes it off this list. By default the pictures,
+        transcripts and documents it produced are left exactly where they are —
+        they are the expensive part and the list entry is not.
+      </p>
+      <label class="radio" style="margin-bottom:var(--space-3)">
+        <input type="checkbox" name="remove_files" value="1">
+        <span class="dot" aria-hidden="true"></span>
+        <span>Also delete everything this job produced{% if total_size %} ({{ total_size }}){% endif %}</span>
+      </label>
+      <div><button class="btn btn-secondary" type="submit">Remove this job</button></div>
+    </form>
+  </details>
 </div>
 {% endblock %}
