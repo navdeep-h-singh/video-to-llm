@@ -2,7 +2,7 @@
 
 **For:** a fresh session with full context.
 **Repo:** `~/My Builds/Video Processor for LLMs`
-**HEAD:** `f62a786` · 1,126 tests passing · ruff, mypy, audit, smoke all clean.
+**HEAD:** `056c542` · 1,174 tests passing · ruff, mypy, audit, smoke all clean.
 
 ---
 
@@ -124,7 +124,8 @@ progress, the file picker, API key entry, search/rename/delete, and a real
 worker-recovery bug that had left the operator's 13-video job idle for nine
 hours behind a claim held by a dead PID.
 
-The second built the five pieces below (`f1d5a32` → `f62a786`).
+The second built the five pieces below (`f1d5a32` → `f62a786`), then swept the
+app for controls that look live and are not (`0305fcd`, `056c542`).
 
 Bugs found by *running* it, across both:
 
@@ -150,8 +151,27 @@ Bugs found by *running* it, across both:
   second worker would have judged it dead and taken over the same output root.
   Now a daemon thread with its own connection (sharing the worker's would
   interleave with the stages' explicit transactions).
+- **The choice cards showed no selection.** `.pick`'s only selected-state rule
+  keyed off `[aria-pressed="true"]`, which nothing ever set — dead from when it
+  was a `<button>`. Three screens; picking an option changed nothing on screen.
+- **The job screen had no stop, rename or delete.** An unclosed `{% if %}` in
+  `{% block title %}` swallowed three panels into `<title>` (1,705 characters of
+  markup). Every route existed and was tested; none could be reached.
+- **The contact sheet crashed on a job with no videos** — the route's own
+  empty-state branch passed the template nothing it needed.
+- **"Numbered copy" was offered when no numbered copies exist**, which is the
+  default. Broken image, plus a caption about sending pictures to a model that
+  never happened.
+- **The sample clip was a still image.** `drawbox`'s `t` is thickness, not time,
+  so the "animated" bars were constants — twenty sampled frames, two distinct
+  pictures, and no error anywhere. Now drawn wide and scrolled with `crop`.
 - `HANDOFF.md` itself carried absolute home paths and had been failing the
   pre-publish audit since it was committed.
+
+The tests added for these pin the *class*, not the instance: no screen may have
+markup in its `<title>`; every screen must render for a job with no videos, with
+no artifacts on disk, and on an empty install; and the sample must be seen to
+change over its length.
 
 ---
 
