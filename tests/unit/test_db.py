@@ -70,21 +70,28 @@ def test_migrations_are_discovered_in_order():
 
 
 def test_migrate_applies_and_records(tmp_path):
+    # Compared against what is on disk rather than a literal: a test that has to
+    # be edited every time a migration is added stops testing the mechanism and
+    # starts testing the number.
+    expected = [version for version, _, _ in discover_migrations()]
+
     connection = connect(database_path(tmp_path))
     assert schema_version(connection) == 0
 
     applied = migrate(connection)
-    assert applied == [1]
-    assert schema_version(connection) == 1
-    assert applied_versions(connection) == {1}
+    assert applied == expected
+    assert schema_version(connection) == max(expected)
+    assert applied_versions(connection) == set(expected)
     connection.close()
 
 
 def test_migrate_is_idempotent(tmp_path):
+    latest = max(version for version, _, _ in discover_migrations())
+
     connection = connect(database_path(tmp_path))
     migrate(connection)
     assert migrate(connection) == [], "a second run must apply nothing"
-    assert schema_version(connection) == 1
+    assert schema_version(connection) == latest
     connection.close()
 
 

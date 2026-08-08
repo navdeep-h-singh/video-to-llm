@@ -11,6 +11,7 @@
 <body data-has-running="{{ 'true' if has_running else 'false' }}"
       data-job-id="{{ live_job_id or '' }}"
       data-fingerprint="{{ progress_fingerprint | default('', true) }}"
+      data-notify-browser="{{ 'true' if notifications is defined and notifications.browser else 'false' }}"
       data-reload="{% block reload_policy %}auto{% endblock %}">
 <a class="skip-link" href="#main">Skip to the main content</a>
 
@@ -49,6 +50,43 @@
     </nav>
 
     <main class="main" id="main">
+      {#
+        Finished while you were away. This product is built for work that runs
+        for hours while you do something else, so the interesting moment is
+        almost always one you were not watching. Backed by a column rather than
+        browser storage, so it survives a restart, a closed tab, and an
+        overnight suspension — which is exactly when it is needed.
+      #}
+      {% set away = finished_while_away | default([], true) %}
+      {% if away %}
+      <div class="panel finished-banner" role="status">
+        <div style="display:flex;align-items:flex-start;gap:var(--space-3);flex-wrap:wrap">
+          <div style="flex:1;min-width:240px">
+            <h4 style="margin:0">
+              {% if away | length == 1 %}
+                A job finished while you were away
+              {% else %}
+                {{ away | length }} jobs finished while you were away
+              {% endif %}
+            </h4>
+            <ul style="margin:var(--space-2) 0 0;padding-left:var(--space-4);font-size:13.5px">
+              {% for job in away %}
+              <li>
+                <a href="/jobs/{{ job.id }}">{{ job.name }}</a>
+                &mdash; {{ job.label | lower }}{% if job.took != "—" %}, took {{ job.took }}{% endif %}
+                <span class="text-muted">({{ job.when }})</span>
+              </li>
+              {% endfor %}
+            </ul>
+          </div>
+          <form method="post" action="/jobs/acknowledge">
+            <input type="hidden" name="came_from" value="{{ request.url.path }}">
+            <button class="btn btn-secondary" type="submit">Got it</button>
+          </form>
+        </div>
+      </div>
+      {% endif %}
+
       {% block content %}{% endblock %}
     </main>
   </div>
@@ -121,6 +159,60 @@
       onChange: function (fn) { listeners.push(fn); },
       isDirty: function () { return dirty; }
     };
+  })();
+
+  // Telling you a long job has finished.
+  //
+  // Everything here happens in this tab. The specification rules out OS
+  // notification registration, launchd, systemd, and any outbound call, which
+  // is the right call for a product whose whole promise is that nothing leaves
+  // the computer — so there is no push service and no email, and this is what
+  // remains: the tab title, and a browser notification if you asked for one.
+  //
+  // The banner above is the durable half, rendered by the server, and it is
+  // what actually covers "I closed the laptop and came back tomorrow".
+  (function () {
+    var body = document.body;
+    var original = document.title;
+    var finished = 0;
+
+    // Only ever constructed after permission has already been granted. Asking
+    // on page load would put a permission prompt in front of someone who has
+    // not yet seen the product work, and teach them to press Deny.
+    var mayNotify = body.dataset.notifyBrowser === "true" &&
+                    "Notification" in window &&
+                    Notification.permission === "granted";
+
+    window.progressWatch.onChange(function (data, willReload) {
+      var stillRunning = data.jobs.some(function (job) { return job.running; });
+      if (stillRunning) return;
+
+      var done = data.jobs.filter(function (job) {
+        return job.status === "completed" || job.status === "completed_with_gaps";
+      });
+      if (!done.length) return;
+
+      if (mayNotify) {
+        try {
+          new Notification("Video to LLM", {
+            body: done.length === 1
+              ? done[0].name + " has finished."
+              : done.length + " jobs have finished.",
+            tag: "video-to-llm-finished"
+          });
+        } catch (error) { /* a refused notification is not worth a broken page */ }
+      }
+
+      // The title badge is the one signal that survives the tab being in the
+      // background with no permission of any kind. Skipped when the page is
+      // about to reload, because the reloaded page renders the real banner.
+      if (!willReload) {
+        finished += done.length;
+        document.title = "(" + finished + " done) " + original;
+      }
+    });
+
+    window.addEventListener("focus", function () { document.title = original; });
   })();
 
   // "Show in Finder" — legitimate because this server runs on the user's own

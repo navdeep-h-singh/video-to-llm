@@ -540,6 +540,16 @@ select.input { appearance: auto; }
 .estimate-facts > div { display: flex; flex-direction: column; gap: 2px; font-size: 13px; }
 .estimate-facts strong { font-size: 17px; font-family: var(--font-heading); font-weight: 800; }
 
+/* Finished while you were away. Marked with the accent because it is the one
+   thing on the page the user has not already seen, but not shouted: the job
+   succeeded, and this is news rather than a problem. */
+.finished-banner {
+  border-left: 3px solid var(--color-accent);
+  background: var(--color-accent-100);
+  margin-bottom: var(--space-4);
+}
+.finished-banner a { color: var(--color-accent-800); }
+
 .keys { display: flex; flex-direction: column; gap: var(--space-2); margin-top: var(--space-3); }
 .key-row {
   display: flex; gap: var(--space-3); align-items: center; flex-wrap: wrap;

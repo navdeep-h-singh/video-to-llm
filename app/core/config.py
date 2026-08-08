@@ -170,6 +170,27 @@ class WorkerSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class NotificationSettings:
+    """How this computer tells you a long job has finished.
+
+    Everything here happens on this machine. The specification excludes OS
+    notification registration, launchd, systemd, and any outbound call, so there
+    is deliberately no push service, no email, and no menu-bar agent — which
+    suits a product whose whole promise is that nothing leaves the computer.
+
+    The title badge and the "finished while you were away" banner are always on:
+    neither asks permission and neither can interrupt anything.
+    """
+
+    #: Browser notifications. Off until asked for — a permission prompt on first
+    #: run is a poor first impression and teaches the user to click Deny.
+    browser: bool = False
+    #: A terminal bell from the worker. Free, needs no permission, and reaches
+    #: someone who started this from a shell and switched away.
+    terminal_bell: bool = True
+
+
+@dataclass(frozen=True, slots=True)
 class CollectionSettings:
     default_token_limit: int = 200_000
     default_reserve_tokens: int = 20_000
@@ -187,6 +208,7 @@ class Settings:
     ollama: OllamaSettings = field(default_factory=OllamaSettings)
     worker: WorkerSettings = field(default_factory=WorkerSettings)
     collections: CollectionSettings = field(default_factory=CollectionSettings)
+    notifications: NotificationSettings = field(default_factory=NotificationSettings)
 
     # The bind host is a constant, exposed as a property so nothing can assign it.
     @property
@@ -281,6 +303,7 @@ def load_settings(
     ollama = data.get("ollama", {})
     worker = data.get("worker", {})
     collections = data.get("collections", {})
+    notifications = data.get("notifications", {})
 
     def env_value(name: str, fallback: Any) -> Any:
         raw = environ.get(ENV_PREFIX + name)
@@ -335,6 +358,10 @@ def load_settings(
             default_token_limit=int(collections.get("default_token_limit", 200_000)),
             default_reserve_tokens=int(collections.get("default_reserve_tokens", 20_000)),
             allow_video_split=bool(collections.get("allow_video_split", False)),
+        ),
+        notifications=NotificationSettings(
+            browser=bool(notifications.get("browser", False)),
+            terminal_bell=bool(notifications.get("terminal_bell", True)),
         ),
     )
     settings.validate()
@@ -419,6 +446,12 @@ backoff_base_seconds = {settings.worker.backoff_base_seconds}
 default_token_limit = {settings.collections.default_token_limit}
 default_reserve_tokens = {settings.collections.default_reserve_tokens}
 allow_video_split = {_toml_value(settings.collections.allow_video_split)}
+
+[notifications]
+# Everything here happens on this computer. There is no push service, no email,
+# and no outbound call of any kind.
+browser = {_toml_value(settings.notifications.browser)}
+terminal_bell = {_toml_value(settings.notifications.terminal_bell)}
 """
 
 

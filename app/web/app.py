@@ -170,6 +170,35 @@ def create_app(settings: Settings) -> FastAPI:
 
         return digest.hexdigest()[:16]
 
+    def finished_while_away(connection: sqlite3.Connection | None) -> list[dict[str, Any]]:
+        """Jobs that finished and have not been seen yet.
+
+        The durable flag is what makes this survive a restart, a closed browser,
+        and an overnight suspension — which is the entire situation this is for.
+        Holding it in the browser would forget the moment the user opened a
+        different tab, and holding it nowhere would make the banner reappear on
+        every page load until the end of time.
+        """
+        if connection is None:
+            return []
+        rows = connection.execute(
+            "SELECT id, name, status, completed_at, started_at FROM jobs"
+            " WHERE completion_acknowledged_at IS NULL"
+            " AND status IN ('completed', 'completed_with_gaps')"
+            " ORDER BY completed_at DESC LIMIT 5"
+        ).fetchall()
+        return [
+            {
+                "id": row["id"],
+                "name": row["name"],
+                "label": status_module.present(row["status"]).label,
+                "when": status_module.format_relative(row["completed_at"]),
+                "took": status_module.format_elapsed(row["started_at"], row["completed_at"]),
+                "with_gaps": row["status"] == "completed_with_gaps",
+            }
+            for row in rows
+        ]
+
     def counts(connection: sqlite3.Connection | None) -> dict[str, str]:
         if connection is None:
             return {"jobs": "", "collections": "", "imports": ""}
@@ -247,6 +276,8 @@ def create_app(settings: Settings) -> FastAPI:
                 # Embedded so the first poll compares against what this render
                 # actually showed, rather than against the poll before it.
                 "progress_fingerprint": progress_fingerprint(connection),
+                "finished_while_away": finished_while_away(connection),
+                "notifications": current().notifications,
                 "asset_version": asset_version(),
             }
             base.update(context)
@@ -1153,6 +1184,64 @@ def create_app(settings: Settings) -> FastAPI:
             return _settings_page(request, problems=problems, draft=candidate)
         return RedirectResponse("/settings?saved=1#collections", status_code=303)
 
+    @app.post("/settings/notifications")
+    def save_notifications_route(
+        request: Request, browser: str = Form(""), terminal_bell: str = Form("")
+    ) -> Response:
+        """How this computer tells you a long job has finished.
+
+        Nothing here reaches off the machine. Ticking the browser option is what
+        triggers the permission prompt, in the browser, on the click — asking on
+        first run instead would teach the user to press Deny before they knew
+        what they were declining.
+        """
+        from dataclasses import replace
+
+        from app.core.config import NotificationSettings
+
+        candidate = replace(
+            current(),
+            notifications=NotificationSettings(
+                browser=bool(browser), terminal_bell=bool(terminal_bell)
+            ),
+        )
+
+        problems = commit_settings(candidate)
+        if problems:
+            return _settings_page(request, problems=problems, draft=candidate)
+        return RedirectResponse("/settings?saved=1#telling-you", status_code=303)
+
+    @app.post("/jobs/acknowledge")
+    def acknowledge_finished(job_id: str = Form(""), came_from: str = Form("/")) -> Response:
+        """Mark finished jobs as seen, so the banner stops.
+
+        With no job named, everything currently finished is acknowledged: the
+        banner is a single dismissal for the whole set, and making the user
+        dismiss six of them one at a time would be a worse version of no banner.
+        """
+        connection = connect()
+        if connection is not None:
+            try:
+                if job_id:
+                    connection.execute(
+                        "UPDATE jobs SET completion_acknowledged_at = ? WHERE id = ?",
+                        (utc_now(), job_id),
+                    )
+                else:
+                    connection.execute(
+                        "UPDATE jobs SET completion_acknowledged_at = ?"
+                        " WHERE completion_acknowledged_at IS NULL"
+                        " AND status IN ('completed', 'completed_with_gaps')",
+                        (utc_now(),),
+                    )
+            finally:
+                connection.close()
+
+        # Only ever back to a path on this application: an open redirect on a
+        # localhost tool is still an open redirect.
+        target = came_from if came_from.startswith("/") and not came_from.startswith("//") else "/"
+        return RedirectResponse(target, status_code=303)
+
     @app.post("/settings/advanced")
     def save_advanced_route(
         request: Request,
@@ -1462,6 +1551,9 @@ def create_app(settings: Settings) -> FastAPI:
                 jobs.append(
                     {
                         "id": row["id"],
+                        # Named so a notification can say which job finished
+                        # rather than just that one did.
+                        "name": row["name"],
                         "status": row["status"],
                         "label": status_module.present(row["status"]).label,
                         "updated": status_module.format_relative(row["updated_at"]),

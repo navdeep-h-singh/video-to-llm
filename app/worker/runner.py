@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import signal
 import sqlite3
+import sys
 import threading
 import time
 from pathlib import Path
@@ -206,6 +207,27 @@ class Worker:
             (status, utc_now(), utc_now(), job_id),
         )
         logger.info("Job %s finished as %s", job_id[:8], status)
+        self._ring_the_bell()
+
+    def _ring_the_bell(self) -> None:
+        """Sound the terminal bell, if the user asked for one.
+
+        The cheapest possible way to reach somebody who started this from a
+        shell and switched away: no permission, no service, no outbound call,
+        and nothing to install. Written to stderr because stdout may be piped
+        somewhere that a control character would corrupt, and guarded because a
+        detached process has no terminal to ring.
+        """
+        if not self.settings.notifications.terminal_bell:
+            return
+        try:
+            if sys.stderr.isatty():
+                sys.stderr.write("\a")
+                sys.stderr.flush()
+        except (OSError, ValueError):
+            # A closed or redirected stream is not a reason to fail a job that
+            # has already finished successfully.
+            pass
 
     def _finalize(self, job_id: str) -> None:
         """Write the job-level outputs. A failure here must not lose the videos."""

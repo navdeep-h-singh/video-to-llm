@@ -420,6 +420,53 @@
   </form>
 </div>
 
+<div class="panel" id="telling-you">
+  <div class="panel-head"><h4 style="margin:0">Telling you when a job finishes</h4></div>
+  <p style="font-size:14px;margin:0 0 var(--space-3)">
+    Jobs here run for hours while you do something else. All of this happens on
+    this computer &mdash; there is no push service, no email, and nothing is sent
+    anywhere.
+  </p>
+
+  <p class="note note-neutral">
+    Two things are always on and need no permission: the tab title shows a count
+    when something finishes, and any job that finished while you were away is
+    listed at the top of the screen until you dismiss it.
+  </p>
+
+  <form method="post" action="/settings/notifications" id="notification-form">
+    <label class="radio" style="margin-top:var(--space-3)">
+      <input type="checkbox" name="browser" value="1" id="notify-browser"
+             {% if draft.notifications.browser %}checked{% endif %}>
+      <span class="dot" aria-hidden="true"></span>
+      <span>Show a notification from the browser</span>
+    </label>
+    <p class="text-muted" style="font-size:12px;margin:var(--space-1) 0 0">
+      Your browser will ask for permission when you tick this, not before. It
+      only works while a tab is open.
+    </p>
+    <p class="note" id="notify-denied" style="display:none;margin-top:var(--space-2)">
+      Your browser is set to block notifications from this page. That is a
+      browser setting, not one this application can change &mdash; the tab title
+      and the banner still work.
+    </p>
+
+    <label class="radio" style="margin-top:var(--space-3)">
+      <input type="checkbox" name="terminal_bell" value="1"
+             {% if draft.notifications.terminal_bell %}checked{% endif %}>
+      <span class="dot" aria-hidden="true"></span>
+      <span>Sound the terminal bell</span>
+    </label>
+    <p class="text-muted" style="font-size:12px;margin:var(--space-1) 0 0">
+      For when you started this from a terminal and switched away.
+    </p>
+
+    <div style="margin-top:var(--space-4)">
+      <button class="btn btn-primary" type="submit">Save</button>
+    </div>
+  </form>
+</div>
+
 <details class="panel" id="advanced">
   <summary style="cursor:pointer;font-family:var(--font-heading);font-weight:800;font-size:15px">
     Advanced
@@ -492,4 +539,38 @@
     </div>
   </form>
 </details>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // The permission prompt belongs to the moment the user asks for the feature,
+  // not to page load. Asking on first run puts a browser dialog in front of
+  // someone who has not yet seen the product do anything, and the reliable
+  // answer to a prompt you did not expect is Deny — which is very hard to undo.
+  (function () {
+    var box = document.getElementById("notify-browser");
+    var denied = document.getElementById("notify-denied");
+    if (!box) return;
+
+    function reflect() {
+      var blocked = "Notification" in window && Notification.permission === "denied";
+      denied.style.display = blocked && box.checked ? "" : "none";
+    }
+
+    box.addEventListener("change", function () {
+      if (!box.checked) { reflect(); return; }
+
+      if (!("Notification" in window)) { reflect(); return; }
+      if (Notification.permission === "granted" || Notification.permission === "denied") {
+        reflect();
+        return;
+      }
+      // Requested from the click itself: browsers refuse a prompt that is not
+      // tied to a user gesture, and rightly so.
+      Notification.requestPermission().then(reflect).catch(reflect);
+    });
+
+    reflect();
+  })();
+</script>
 {% endblock %}

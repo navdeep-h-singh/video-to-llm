@@ -319,3 +319,80 @@ def test_the_api_documentation_endpoints_are_disabled(settings):
 
 def test_settings_with_a_different_port_still_binds_loopback(settings):
     assert replace(settings, port=9999).host == "127.0.0.1"
+
+
+# ── The terminal bell ─────────────────────────────────────────────────────
+#
+# The cheapest way to reach someone who started this from a shell and switched
+# away: no permission, no service, no outbound call, nothing to install.
+
+
+def _finish_a_job(settings, connection):
+    connection.execute(
+        "INSERT INTO jobs (id, name, status, output_root, created_at, updated_at)"
+        " VALUES (?,?,?,?,?,?)",
+        ("j1", "Ready job", "ready", str(settings.output_root), utc_now(), utc_now()),
+    )
+    connection.commit()
+    run_worker(settings, once=True)
+
+
+class _FakeTerminal:
+    def __init__(self, *, tty=True):
+        self.tty = tty
+        self.written = ""
+
+    def isatty(self):
+        return self.tty
+
+    def write(self, text):
+        self.written += text
+
+    def flush(self):
+        pass
+
+
+def test_a_finished_job_rings_the_terminal_bell(settings, db, monkeypatch):
+    terminal = _FakeTerminal()
+    monkeypatch.setattr("sys.stderr", terminal)
+
+    _finish_a_job(settings, db)
+
+    assert "\a" in terminal.written
+
+
+def test_the_bell_can_be_switched_off(settings, db, monkeypatch):
+    from app.core.config import NotificationSettings
+
+    quiet = replace(settings, notifications=NotificationSettings(terminal_bell=False))
+    terminal = _FakeTerminal()
+    monkeypatch.setattr("sys.stderr", terminal)
+
+    _finish_a_job(quiet, db)
+
+    assert "\a" not in terminal.written
+
+
+def test_nothing_is_written_when_there_is_no_terminal(settings, db, monkeypatch):
+    """A worker started detached has no terminal to ring, and a stray control
+    character in a redirected log is noise at best."""
+    terminal = _FakeTerminal(tty=False)
+    monkeypatch.setattr("sys.stderr", terminal)
+
+    _finish_a_job(settings, db)
+
+    assert terminal.written == ""
+
+
+def test_a_closed_stream_does_not_fail_a_finished_job(settings, db, monkeypatch):
+    """The job succeeded. Losing the bell is not a reason to report otherwise."""
+
+    class Closed:
+        def isatty(self):
+            raise ValueError("I/O operation on closed file")
+
+    monkeypatch.setattr("sys.stderr", Closed())
+
+    _finish_a_job(settings, db)
+
+    assert db.execute("SELECT status FROM jobs WHERE id='j1'").fetchone()["status"] == "completed"

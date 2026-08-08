@@ -881,3 +881,116 @@ def test_a_rerun_is_not_started_without_a_model(client, describable):
     assert response.status_code == 303
     assert "/settings" in response.headers["location"]
     assert describable.execute("SELECT COUNT(*) FROM job_videos").fetchone()[0] == 1
+
+
+# ── Telling you a job finished ────────────────────────────────────────────
+#
+# The product is built for work that runs for hours while you do something
+# else, so the moment a job finishes is almost always one nobody is watching.
+# The specification rules out OS notification registration, launchd, systemd,
+# and any outbound call — so what is left has to work in the page itself.
+
+
+def finish_job(connection, job_id="j1", *, status="completed"):
+    connection.execute(
+        "UPDATE jobs SET status = ?, started_at = ?, completed_at = ?, updated_at = ? WHERE id = ?",
+        (status, "2026-08-07T09:00:00+00:00", utc_now(), utc_now(), job_id),
+    )
+    connection.commit()
+
+
+def test_a_job_that_finished_while_you_were_away_is_reported(client, db):
+    seed_job(db)
+    finish_job(db)
+
+    body = client.get("/").text
+    assert "finished while you were away" in body
+    assert "Session review" in body
+
+
+def test_the_banner_survives_a_restart(client, db, settings):
+    """The state that matters is 'have you been told', and it has to outlive the
+    browser: this exists for the case where the laptop was closed overnight."""
+    seed_job(db)
+    finish_job(db)
+
+    assert "finished while you were away" in client.get("/").text
+
+    # A completely new application object, as if the server had been restarted.
+    with TestClient(create_app(settings)) as restarted:
+        assert "finished while you were away" in restarted.get("/").text
+
+
+def test_dismissing_the_banner_stops_it_coming_back(client, db):
+    seed_job(db)
+    finish_job(db)
+    client.get("/")
+
+    client.post("/jobs/acknowledge", data={"came_from": "/"})
+
+    assert "finished while you were away" not in client.get("/").text
+
+
+def test_a_job_finishing_later_is_reported_again(client, db):
+    """Dismissal acknowledges what has finished, not the feature."""
+    seed_job(db)
+    finish_job(db)
+    client.post("/jobs/acknowledge", data={"came_from": "/"})
+
+    seed_job(db, job_id="j2", name="A second job")
+    finish_job(db, "j2")
+
+    assert "A second job" in client.get("/").text
+
+
+def test_a_running_job_is_not_announced_as_finished(client, db):
+    seed_job(db, status="analyzing")
+    assert "finished while you were away" not in client.get("/").text
+
+
+def test_dismissal_only_ever_returns_somewhere_on_this_application(client, db):
+    """An open redirect on a localhost tool is still an open redirect, and this
+    endpoint takes a path straight from the page."""
+    seed_job(db)
+    finish_job(db)
+
+    for attempt in ("https://example.com/", "//example.com/phish"):
+        response = client.post(
+            "/jobs/acknowledge", data={"came_from": attempt}, follow_redirects=False
+        )
+        assert response.headers["location"] == "/"
+
+
+def test_browser_notifications_are_off_until_asked_for(client, db):
+    """A permission prompt on first run puts a dialog in front of someone who
+    has not yet seen the product work, and teaches them to press Deny."""
+    seed_job(db)
+    body = client.get("/").text
+
+    assert 'data-notify-browser="false"' in body
+    # Nothing may request permission at load time.
+    assert "requestPermission" not in body
+
+
+def test_ticking_the_box_is_what_requests_permission(client):
+    """Tied to the click, because a browser refuses a prompt that is not."""
+    body = client.get("/settings").text
+    assert 'id="notify-browser"' in body
+    assert "requestPermission" in body
+    assert 'addEventListener("change"' in body
+
+
+def test_the_always_on_signals_are_described_as_needing_no_permission(client):
+    body = client.get("/settings").text
+    assert "always on and need no permission" in body
+
+
+def test_nothing_about_notifications_reaches_off_the_machine(client, db):
+    """The header badge promises nothing is uploaded. A notification feature is
+    exactly where a push service would sneak in."""
+    seed_job(db)
+    finish_job(db)
+    body = client.get("/").text + client.get("/settings").text
+
+    for outbound in ("https://", "serviceWorker", "pushManager", "mailto:"):
+        assert outbound not in body, f"{outbound!r} appears in a notification path"

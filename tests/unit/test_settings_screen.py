@@ -648,3 +648,49 @@ def test_a_port_change_says_it_needs_a_restart(client, settings_path):
     body = client.get("/settings").text
     assert "9001" in body
     assert "started again" in body or "next time you start" in body
+
+
+# ── Notifications ─────────────────────────────────────────────────────────
+
+
+def test_notification_preferences_are_saved(client, settings_path):
+    client.post("/settings/notifications", data={"browser": "1", "terminal_bell": "1"})
+
+    written = settings_path.read_text(encoding="utf-8")
+    assert "[notifications]" in written
+    assert "browser = true" in written
+    assert "terminal_bell = true" in written
+
+
+def test_notifications_default_to_the_ones_that_need_no_permission(tmp_path):
+    """Browser notifications off, terminal bell on. The prompt is the cost, and
+    nobody should pay it before they have seen the product do anything."""
+    settings = Settings()
+    assert settings.notifications.browser is False
+    assert settings.notifications.terminal_bell is True
+
+
+def test_saving_notifications_leaves_the_rest_of_the_configuration_alone(client, settings_path):
+    client.post(
+        "/settings/transcription",
+        data={
+            "backend": "auto",
+            "model": "large-v3",
+            "language": "en",
+            "silence_threshold_seconds": "3",
+        },
+    )
+    client.post("/settings/notifications", data={"browser": "1"})
+
+    assert 'model = "large-v3"' in settings_path.read_text(encoding="utf-8")
+
+
+def test_no_notification_setting_can_reach_off_the_machine(client):
+    """The specification excludes OS notification registration, launchd,
+    systemd, telemetry, and any outbound call. This is the feature most likely
+    to grow one by accident."""
+    body = client.get("/settings").text
+
+    assert "no push service" in body
+    for outbound in ("serviceWorker", "pushManager", "mailto:", "webhook"):
+        assert outbound not in body
