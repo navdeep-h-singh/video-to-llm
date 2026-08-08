@@ -2,8 +2,10 @@
 
 **For:** a fresh session with full context.
 **Repo:** `~/My Builds/Video Processor for LLMs`
-**HEAD:** `765ab3f` · 1,174 tests passing · ruff, mypy, audit, smoke all clean.
-**Working tree:** clean. Nothing is half-built.
+**State:** 1,174 tests passing · ruff, mypy, audit and smoke all clean · working
+tree clean · nothing half-built. Confirm with `git log --oneline -1` and the
+commands in §2 — this file deliberately carries no hash of its own commit,
+because writing one changes it.
 
 ---
 
@@ -144,9 +146,10 @@ the file picker, API key entry, search/rename/delete, and a worker-recovery bug
 that had left the 13-video job idle for nine hours behind a claim held by a dead
 PID.
 
-**Session two** (`f1d5a32` → `c2d3108`, 11 commits) built the five pieces that
-had been left for design decisions, then swept the app for more of the same
-class of defect.
+**Session two** (everything from `f1d5a32` onward) built the five pieces that had
+been left for design decisions, then swept the app for more of the same class of
+defect. `git log --oneline f1d5a32~1..` is the whole story, and each message
+explains why rather than what.
 
 ### A. Collection wizard (F08 + F09)
 
