@@ -14,6 +14,7 @@ the spend that crossed the limit had already left.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import sqlite3
 from collections.abc import Callable
@@ -120,16 +121,76 @@ def build_batches(
 
 
 def completed_batch_indexes(connection: sqlite3.Connection, stage_run_id: str) -> set[int]:
-    """Batch indexes already durably recorded as completed.
+    """Batch indexes already durably completed for this video's stage.
 
-    These are never re-sent. On a cloud provider, re-sending one means paying
-    for the same work twice.
+    Across **every attempt**, not just this one. Scoped to a single
+    ``stage_run_id`` this was a promise the code did not keep: a stage that is
+    retried gets a fresh ``stage_runs`` row from ``_begin_stage``, so a restarted
+    worker saw none of the earlier attempt's work and described all of it again.
+    On a local model that silently costs hours — three of them, on the run that
+    exposed this. On a paid provider it is the difference between resuming and
+    being billed twice, which is exactly what this function exists to prevent.
+
+    Attempts of the same stage on the same video are the same work by
+    definition: a rerun with different settings produces a new ``job_videos``
+    row, so it cannot collide here.
     """
     rows = connection.execute(
-        "SELECT batch_index FROM batches WHERE stage_run_id = ? AND status = 'completed'",
+        "SELECT DISTINCT b.batch_index FROM batches b"
+        " JOIN stage_runs prior ON prior.id = b.stage_run_id"
+        " JOIN stage_runs mine ON mine.job_video_id = prior.job_video_id"
+        "   AND mine.stage = prior.stage"
+        " WHERE mine.id = ? AND b.status = 'completed'",
         (stage_run_id,),
     ).fetchall()
     return {int(row["batch_index"]) for row in rows}
+
+
+def completed_batch_descriptions(
+    connection: sqlite3.Connection, stage_run_id: str, output_root: Path
+) -> dict[int, list[FrameDescription]]:
+    """Descriptions already on disk, read back so a resume can carry them.
+
+    Skipping a completed batch used to contribute nothing to the run's results:
+    the counter went up and the descriptions did not come with it, so a resumed
+    stage wrote a results file containing only what it happened to redo. The
+    work was on disk and the document did not mention it.
+
+    A batch whose artifact is missing or unreadable is **not** returned, so it
+    gets described again. Redoing work is wasteful; omitting it silently from
+    the evidence is the failure this whole product exists to avoid.
+    """
+    rows = connection.execute(
+        "SELECT DISTINCT b.batch_index, b.artifact_path FROM batches b"
+        " JOIN stage_runs prior ON prior.id = b.stage_run_id"
+        " JOIN stage_runs mine ON mine.job_video_id = prior.job_video_id"
+        "   AND mine.stage = prior.stage"
+        " WHERE mine.id = ? AND b.status = 'completed' AND b.artifact_path IS NOT NULL",
+        (stage_run_id,),
+    ).fetchall()
+
+    fields = {f.name for f in dataclasses.fields(FrameDescription)}
+    recovered: dict[int, list[FrameDescription]] = {}
+
+    for row in rows:
+        path = Path(output_root) / str(row["artifact_path"])
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            described = [
+                FrameDescription(**{k: v for k, v in item.items() if k in fields})
+                for item in payload.get("descriptions", [])
+            ]
+        except (OSError, ValueError, TypeError) as error:
+            logger.warning(
+                "Batch %s was recorded complete but could not be read back (%s); "
+                "it will be described again.",
+                row["batch_index"],
+                error,
+            )
+            continue
+        recovered[int(row["batch_index"])] = described
+
+    return recovered
 
 
 def run_visual_analysis(
@@ -164,6 +225,7 @@ def run_visual_analysis(
     output_dir = Path(output_dir)
     batch_dir = output_dir / BATCH_DIRNAME
     already_done = completed_batch_indexes(connection, stage_run_id)
+    carried_forward = completed_batch_descriptions(connection, stage_run_id, output_root)
     running_cost = 0.0
     charged = False
     frames_seen = 0
@@ -178,6 +240,25 @@ def run_visual_analysis(
         if batch_index in already_done:
             # Resuming: this batch is already paid for and on disk.
             result.batches_skipped += 1
+            if batch_index in carried_forward:
+                # Carried, not merely counted. Without this the resumed run wrote
+                # a results file describing only the frames it happened to redo.
+                result.descriptions.extend(carried_forward[batch_index])
+            else:
+                # Recorded complete, but the descriptions cannot be read back.
+                # Re-sending is not the answer: a completed batch is never sent
+                # twice, because on a paid provider that is being charged twice
+                # for work already done. So this becomes a visible gap instead —
+                # the same treatment as a batch that failed outright. A gap the
+                # user can see is recoverable; a frame missing from the document
+                # with nothing to say so is not.
+                result.skips.extend(
+                    skips_for(
+                        request,
+                        "described earlier, but the saved result could not be read back",
+                        attempts=0,
+                    )
+                )
             logger.debug("Batch %d already completed; not sending again", batch_index)
             moved_past(request)
             continue

@@ -241,3 +241,45 @@ def test_the_percentage_ignores_an_abandoned_attempt(client, db):
     # 100% of frames and 50% of the live visual attempt. The dead one is not a
     # third data point.
     assert payload["jobs"][0]["percent"] == 75
+
+
+# ── When the estimate appears ─────────────────────────────────────────────
+
+
+def _running_since(connection, *, seconds_ago, total, done):
+    import datetime
+
+    started = (
+        datetime.datetime.now(datetime.UTC) - datetime.timedelta(seconds=seconds_ago)
+    ).isoformat()
+    connection.execute(
+        "UPDATE stage_runs SET started_at = ?, items_total = ?, items_done = ? WHERE id = 's1'",
+        (started, total, done),
+    )
+    connection.commit()
+
+
+def test_the_estimate_appears_early_on_a_very_long_stage(client, db):
+    """Gated on evidence, not on fraction of the work.
+
+    A 2% floor meant nothing appeared until 30 of 1,488 pictures were done —
+    eleven minutes into a nine-hour run, which is precisely the stretch where
+    someone is deciding whether to wait. Two minutes and 6 pictures is a
+    thinner sample but an honest one, and it refines in view.
+    """
+    seed(db, stage="visual")
+    _running_since(db, seconds_ago=120, total=1488, done=6)
+
+    body = client.get("/jobs/j1").text
+    assert " left</p>" in body, "no estimate after two minutes and six pictures"
+
+
+def test_no_estimate_is_offered_in_the_first_seconds(client, db):
+    """A rate from three seconds of a nine-hour stage is noise presented as
+    information. Saying nothing is the honest output."""
+    seed(db, stage="visual")
+    _running_since(db, seconds_ago=8, total=1488, done=1)
+
+    body = client.get("/jobs/j1").text
+    assert " left</p>" not in body
+    assert "nearly done" not in body

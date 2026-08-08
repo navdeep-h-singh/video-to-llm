@@ -2547,12 +2547,22 @@ def _stage_eta(started_at: str | None, done: int, total: int) -> str:
     if not started_at or not total or done <= 0:
         return ""
 
+    # Gated on how much *evidence* there is, not on how far through the work it
+    # represents. A 2% floor was fine on a twenty-picture sample and useless on
+    # the stage that needs this most: 2% of 1,488 pictures is thirty of them, so
+    # the number stayed hidden for the first eleven minutes of a nine-hour run —
+    # exactly the stretch where someone is deciding whether to wait.
+    #
+    # Forty-five seconds of a stage is enough to say something honest about it.
+    # The figure is coarse on purpose (see format_span) and refines every couple
+    # of seconds as the page updates, so an early estimate corrects itself in
+    # view rather than standing as a promise.
     elapsed = status_module.elapsed_seconds(started_at)
-    if elapsed is None or elapsed < 5:
+    if elapsed is None or elapsed < 45:
         return ""
 
     fraction = done / total
-    if fraction < 0.02 or fraction >= 1:
+    if fraction >= 1:
         return ""
 
     remaining = elapsed / fraction - elapsed
