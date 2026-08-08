@@ -994,3 +994,69 @@ def test_nothing_about_notifications_reaches_off_the_machine(client, db):
 
     for outbound in ("https://", "serviceWorker", "pushManager", "mailto:"):
         assert outbound not in body, f"{outbound!r} appears in a notification path"
+
+
+# ── The sample clip ───────────────────────────────────────────────────────
+
+
+def test_an_empty_dashboard_offers_the_sample(client):
+    """The empty dashboard explains what the product is for and shows nothing it
+    does. One minute of generated footage is the whole pitch."""
+    body = client.get("/").text
+    assert "Try it with a generated sample" in body
+    assert 'action="/sample"' in body
+
+
+def test_the_sample_is_never_presented_as_a_real_recording(client):
+    """Calling it a recording would be a claim about where data came from, which
+    is worse than ordinary placeholder content."""
+    body = client.get("/").text
+    assert "test footage, not a recording" in body
+
+
+def test_the_readiness_screen_offers_it_too(client):
+    """The other screen a first-time user lands on."""
+    assert "Try it with a generated sample" in client.get("/launch").text
+
+
+def test_a_dashboard_with_jobs_does_not_push_the_sample(client, db):
+    """It is a first-run affordance. Someone with their own work does not need
+    to be offered test footage."""
+    seed_job(db)
+    assert "Try it with a generated sample" not in client.get("/").text
+
+
+def test_pressing_it_makes_a_job_on_a_generated_clip(client, db, settings):
+    from app.services.sample import ffmpeg_available
+
+    if not ffmpeg_available():
+        pytest.skip("FFmpeg is not installed")
+
+    response = client.post("/sample", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert response.headers["location"].startswith("/jobs/")
+
+    job = db.execute("SELECT name, status FROM jobs").fetchone()
+    assert "generated test footage" in job["name"]
+    assert job["status"] == "ready"
+
+
+def test_the_clip_lands_under_the_output_root(client, settings):
+    from app.services.sample import ffmpeg_available, sample_path
+
+    if not ffmpeg_available():
+        pytest.skip("FFmpeg is not installed")
+
+    client.post("/sample")
+
+    assert sample_path(settings.output_root).is_file()
+
+
+def test_a_machine_without_ffmpeg_is_told_rather_than_failing(client, monkeypatch):
+    monkeypatch.setattr("app.services.sample.ffmpeg_available", lambda: False)
+
+    response = client.post("/sample")
+
+    assert response.status_code == 200
+    assert "FFmpeg is not installed" in response.text

@@ -1,6 +1,7 @@
 {% extends "base.html" %}
-{% from "_macros.html" import status %}
+{% from "_macros.html" import status, sample_button %}
 {% block title %}First-run check — Video to LLM{% endblock %}
+{% set problems = problems | default([], true) %}
 {% block content %}
 <div class="page-head">
   <div>
@@ -34,12 +35,23 @@
   {% endfor %}
 </ol>
 
+{% if problems %}
+<div class="panel" style="border-left:3px solid var(--color-accent)" role="alert">
+  <ul style="margin:0;padding-left:var(--space-4);font-size:14px">
+    {% for problem in problems %}<li>{{ problem }}</li>{% endfor %}
+  </ul>
+</div>
+{% endif %}
+
 <div class="panel" style="margin-top:var(--space-4)">
   {% if report.ready %}
     <h4>Ready to go</h4>
     <p>You can process video on this computer now. Descriptions are optional and
        can be switched on later without redoing any work.</p>
-    <a class="btn btn-primary" href="/jobs/new">Start a job</a>
+    <div style="display:flex;gap:var(--space-2);flex-wrap:wrap">
+      <a class="btn btn-primary" href="/jobs/new">Start a job</a>
+      {{ sample_button() }}
+    </div>
   {% else %}
     <h4>Not quite ready</h4>
     <p>Sort out the items marked above, then check again.</p>

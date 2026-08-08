@@ -25,6 +25,18 @@
 </div>
 {% endmacro %}
 
+{#
+  One definition, because the honesty of the wording matters more than where the
+  button sits. The clip is drawn by FFmpeg on this computer; calling it anything
+  that implied a real recording would be a claim about where data came from,
+  which is a worse lie than ordinary placeholder content.
+#}
+{% macro sample_button(style="btn-secondary") %}
+<form method="post" action="/sample" style="display:inline">
+  <button class="btn {{ style }}" type="submit">Try it with a generated sample</button>
+</form>
+{% endmacro %}
+
 {% macro empty(message, hint=None) %}
 <div class="empty">
   <p>{{ message }}</p>

@@ -624,6 +624,16 @@ def run_assembly_stage(context: StageContext, *, display_name: str = "") -> Path
 
         enrichment = enrich(descriptions, info.duration_seconds, silences)
 
+        # Counted from the manifest rather than from the descriptions: they are
+        # different numbers whenever descriptions are off or incomplete, which
+        # is the common case rather than the exception.
+        frame_records = []
+        manifest_path = context.output_dir / MANIFEST_FILENAME
+        if manifest_path.is_file():
+            from app.pipeline.visual import load_frame_records
+
+            frame_records = load_frame_records(manifest_path)
+
         content = assemble_video(
             display_name=display_name or context.source_path.name,
             duration_seconds=info.duration_seconds,
@@ -632,6 +642,7 @@ def run_assembly_stage(context: StageContext, *, display_name: str = "") -> Path
             enrichment=enrichment,
             interval_ms=context.interval_ms,
             gap_count=gap_count,
+            frame_count=len(frame_records) if frame_records else None,
         )
         assembled_path = write_assembled(context.output_dir, content)
     except Exception as error:

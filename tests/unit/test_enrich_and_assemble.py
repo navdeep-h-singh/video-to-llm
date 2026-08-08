@@ -471,3 +471,58 @@ def test_writing_assembled_produces_a_file(tmp_path):
     path = write_assembled(tmp_path, "some assembled content\n")
     assert path.name == "assembled.txt"
     assert path.read_text(encoding="utf-8") == "some assembled content\n"
+
+
+# ── The header counts pictures, not descriptions ──────────────────────────
+
+
+def test_the_header_reports_the_pictures_that_exist(tmp_path):
+    """Found by running a sample job with descriptions off: the document opened
+    by announcing "Pictures 0" with twenty of them on disk, because the label
+    said pictures and the number was descriptions."""
+    content = assemble_video(
+        display_name="clip.mp4",
+        duration_seconds=60.0,
+        transcript_segments=[],
+        descriptions=[],
+        interval_ms=3000,
+        frame_count=20,
+    )
+
+    assert "Pictures          20" in content
+    assert "Described         0" in content
+
+
+def test_the_two_counts_are_reported_separately_when_they_differ(tmp_path):
+    """They answer different questions and are routinely different — a job with
+    gaps has more pictures than descriptions, and that is worth seeing."""
+    described = [
+        FrameDescription(index=i, timestamp_seconds=float(i), visual_description="a chart")
+        for i in range(3)
+    ]
+
+    content = assemble_video(
+        display_name="clip.mp4",
+        duration_seconds=60.0,
+        transcript_segments=[],
+        descriptions=described,
+        frame_count=20,
+    )
+
+    assert "Pictures          20" in content
+    assert "Described         3" in content
+
+
+def test_an_unknown_picture_count_is_not_invented(tmp_path):
+    """No manifest means the number is genuinely unknown. Reporting the
+    description count under a "Pictures" label is how this went wrong before."""
+    content = assemble_video(
+        display_name="clip.mp4",
+        duration_seconds=60.0,
+        transcript_segments=[],
+        descriptions=[],
+        frame_count=None,
+    )
+
+    assert "Pictures          " not in content
+    assert "Described         0 picture(s)" in content

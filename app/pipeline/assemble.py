@@ -143,6 +143,7 @@ def assemble_video(
     enrichment: Enrichment | None = None,
     interval_ms: int | None = None,
     gap_count: int = 0,
+    frame_count: int | None = None,
 ) -> str:
     """Produce one video's `assembled.txt` content."""
     header = [
@@ -153,7 +154,17 @@ def assemble_video(
     ]
     if interval_ms:
         header.append(f"Picture every     {interval_ms / 1000:g} seconds")
-    header.append(f"Pictures          {len(descriptions):,}")
+
+    # "Pictures" counts pictures. It used to be the number of *descriptions*
+    # under that label, so a job run without descriptions — the default — opened
+    # its document by announcing "Pictures 0" with sixty of them on disk. The
+    # two numbers are only ever reported separately now, because they answer
+    # different questions and are routinely different.
+    if frame_count is None:
+        header.append(f"Described         {len(descriptions):,} picture(s)")
+    else:
+        header.append(f"Pictures          {frame_count:,}")
+        header.append(f"Described         {len(descriptions):,}")
     header.append(f"Transcript lines  {len(transcript_segments):,}")
     if gap_count:
         header.append(

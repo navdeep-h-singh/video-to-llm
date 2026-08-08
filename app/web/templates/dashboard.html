@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_macros.html" import status, bar, empty %}
+{% from "_macros.html" import status, bar, empty, sample_button %}
 {% block title %}Dashboard — Video to LLM{% endblock %}
 {% block content %}
 <div class="page-head">
@@ -94,6 +94,16 @@
     {{ empty("No jobs match that.", "Try a different search, or clear the filters.") }}
   {% else %}
     {{ empty("No jobs yet.", "Start one and it will keep working in the background.") }}
+    {# An empty dashboard explains what the product is for but shows nothing it
+       does. One minute of generated footage is the whole pitch, with nothing to
+       find and nothing to type. #}
+    <div style="text-align:center;padding:0 0 var(--space-8)">
+      {{ sample_button("btn-primary") }}
+      <p class="text-muted" style="font-size:12px;margin:var(--space-2) 0 0">
+        Draws a one-minute clip on this computer and runs it end to end. It is
+        test footage, not a recording of anything.
+      </p>
+    </div>
   {% endif %}
 </div>
 {% endblock %}

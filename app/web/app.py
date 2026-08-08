@@ -1574,6 +1574,77 @@ def create_app(settings: Settings) -> FastAPI:
         finally:
             connection.close()
 
+    # ── The sample clip (F22) ─────────────────────────────────────────────
+
+    @app.post("/sample")
+    def try_the_sample(request: Request) -> Response:
+        """Draw a sample clip and start a job on it.
+
+        A fresh install has nothing to look at and no way to see what the
+        product makes without supplying a video and waiting. Nothing is
+        downloaded and nothing is shipped in the repository: FFmpeg draws the
+        clip here, and it is labelled as generated test footage everywhere it
+        appears — presenting it as a real recording would be a claim about where
+        data came from, which is worse than ordinary placeholder content.
+        """
+        from app.services.jobs import create_job
+        from app.services.sample import SampleError, generate_sample
+
+        active = current()
+        root = active.output_root
+        if root is None:
+            return RedirectResponse("/launch", status_code=303)
+
+        connection = connect()
+        if connection is None:
+            open_database(root).close()
+            connection = connect()
+        if connection is None:
+            return RedirectResponse("/launch", status_code=303)
+
+        try:
+            try:
+                clip = generate_sample(root)
+            except SampleError as error:
+                return page(
+                    request,
+                    "launch.html",
+                    "launch",
+                    report=run_doctor(active),
+                    problems=[str(error)],
+                )
+
+            created = create_job(
+                connection,
+                active,
+                name="Sample — generated test footage",
+                paths=[clip.path],
+                # Every three seconds, which is 20 pictures from the minute.
+                # Found by running it: at one second the frames and transcript
+                # still finish in under a minute, but describing 60 pictures
+                # through a local model takes about eighteen, and a first
+                # impression that spends a quarter of an hour on a test clip is
+                # not one worth making. Twenty is still enough for the viewer
+                # and the contact sheet to look like something.
+                interval_ms=3000,
+            )
+            if created.problems:
+                return page(
+                    request,
+                    "launch.html",
+                    "launch",
+                    report=run_doctor(active),
+                    problems=created.problems,
+                )
+
+            connection.execute(
+                "INSERT INTO events (job_id, level, kind, message, created_at) VALUES (?,?,?,?,?)",
+                (created.job_id, "info", "sample_created", clip.detail, utc_now()),
+            )
+            return RedirectResponse(f"/jobs/{created.job_id}", status_code=303)
+        finally:
+            connection.close()
+
     # ── Targeted reruns (F12) ─────────────────────────────────────────────
 
     @app.get("/jobs/{job_id}/rerun", response_class=HTMLResponse)
