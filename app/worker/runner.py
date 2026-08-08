@@ -16,6 +16,8 @@ import sqlite3
 import sys
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 
@@ -49,6 +51,7 @@ class Worker:
         self.output_root: Path = settings.output_root  # type: ignore[assignment]
         self._stop = threading.Event()
         self._last_heartbeat = 0.0
+        self._lost_ownership = False
 
     def request_stop(self, *_: object) -> None:
         """Ask the loop to finish the current unit of work and exit.
@@ -66,20 +69,78 @@ class Worker:
         return self._stop.is_set()
 
     def beat(self) -> bool:
-        """Refresh the claim on schedule. False when ownership was lost."""
-        now = time.monotonic()
-        if now - self._last_heartbeat < HEARTBEAT_INTERVAL_SECONDS:
-            return True
-        self._last_heartbeat = now
+        """Refresh the claim now. False when ownership was lost.
+
+        Kept for the loop's own check and for callers that want a synchronous
+        refresh; the steady rhythm comes from :meth:`_keep_alive`.
+        """
+        self._last_heartbeat = time.monotonic()
 
         if not heartbeat(self.connection, self.output_root, self.worker_id):
-            logger.error(
-                "This worker no longer owns the output folder — another worker took over. "
-                "Stopping so the two do not write over each other."
-            )
-            self._stop.set()
+            self._lose_ownership()
             return False
         return True
+
+    def _lose_ownership(self) -> None:
+        logger.error(
+            "This worker no longer owns the output folder — another worker took over. "
+            "Stopping so the two do not write over each other."
+        )
+        self._lost_ownership = True
+        self._stop.set()
+
+    def _keep_alive(self) -> None:
+        """Refresh the claim on a timer, including while a stage is running.
+
+        This used to happen only at the top of the run loop, which meant it did
+        not happen at all for the entire duration of a job. That is exactly
+        backwards: the stages this product is built for are the long ones — a
+        fifteen-hour course, or two thousand frames through a local model — and
+        those are precisely the runs that went hours without a beat.
+
+        Two things went wrong on a real machine as a result. The interface
+        reported "Stopped unexpectedly" while the worker was working perfectly
+        well, which is the most misleading state it can show. And the claim went
+        stale, so a second worker would have judged the first one dead and taken
+        over, leaving two of them writing the same output root — the one outcome
+        the claim exists to prevent.
+
+        Its own connection, deliberately. Sharing the worker's would interleave
+        this write with the explicit transactions the stages run, so a heartbeat
+        could land inside a stage's transaction and be rolled back with it — or
+        commit one early.
+        """
+        connection = open_database(self.output_root, migrate_on_open=False)
+        try:
+            while not self._stop.wait(HEARTBEAT_INTERVAL_SECONDS):
+                try:
+                    if not heartbeat(connection, self.output_root, self.worker_id):
+                        self._lose_ownership()
+                        return
+                except sqlite3.Error as error:
+                    # A failed beat is not itself a reason to abandon a running
+                    # job: the claim only goes stale after several missed ones,
+                    # and the next attempt is fifteen seconds away.
+                    logger.warning(
+                        "Could not refresh the worker claim: %s",
+                        redacted_exception_text(error),
+                    )
+        finally:
+            connection.close()
+
+    @contextmanager
+    def keeping_the_claim_fresh(self) -> Iterator[None]:
+        """Run the heartbeat for as long as the body runs."""
+        thread = threading.Thread(target=self._keep_alive, name="worker-heartbeat", daemon=True)
+        thread.start()
+        try:
+            yield
+        finally:
+            self._stop.set()
+            # Bounded: the thread waits on the same event, so it wakes at once.
+            # A worker that hung here would be worse than one that leaked a
+            # daemon thread on the way out.
+            thread.join(timeout=HEARTBEAT_INTERVAL_SECONDS)
 
     def claim_next_job(self) -> sqlite3.Row | None:
         """Return the oldest job waiting for work, if any."""
@@ -295,8 +356,12 @@ class Worker:
 
         poll = max(1, self.settings.worker.poll_interval_seconds)
 
+        with self.keeping_the_claim_fresh():
+            self._loop(once=once, poll=poll)
+
+    def _loop(self, *, once: bool, poll: int) -> None:
         while not self.stopping:
-            if not self.beat():
+            if self._lost_ownership:
                 break
 
             try:

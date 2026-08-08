@@ -475,3 +475,111 @@ def test_everything_else_about_the_settings_is_untouched(settings, db):
     assert resolved.output_root == settings.output_root
     assert resolved.worker == settings.worker
     assert resolved.visual_analysis.budget == settings.visual_analysis.budget
+
+
+# ── The claim stays fresh while a stage is busy ───────────────────────────
+#
+# Found live: a worker seven hours into describing 2,371 frames still held a
+# heartbeat from before the job started. `beat()` was called only at the top of
+# the run loop, so it did not run at all for the duration of a job — and the
+# long jobs are the entire point of this product.
+
+
+def test_the_claim_is_refreshed_while_a_job_runs(settings, db, monkeypatch):
+    """The regression that matters. A stage that blocks for hours must not let
+    the claim rot underneath it: the interface reports "Stopped unexpectedly",
+    and a second worker would judge this one dead and start writing the same
+    output root.
+
+    Asserted by watching the stored value change rather than by measuring its
+    age. Heartbeats are written with second-resolution timestamps, so an
+    age-based check inside a short test is really a test of the clock's
+    granularity — it passes or fails on where the second boundary happens to
+    fall. Hence the deliberate 2.5s: long enough that the timestamp must move.
+    """
+    import time as clock
+
+    from app.core.db import open_database
+    from app.core.locks import read_claim
+
+    monkeypatch.setattr("app.worker.runner.HEARTBEAT_INTERVAL_SECONDS", 0.05)
+
+    db.execute(
+        "INSERT INTO jobs (id, name, status, output_root, created_at, updated_at)"
+        " VALUES (?,?,?,?,?,?)",
+        ("j1", "A slow job", "ready", str(settings.output_root), utc_now(), utc_now()),
+    )
+    db.commit()
+
+    seen: list[str] = []
+
+    def slow_job(self, job):
+        # Stands in for a stage that blocks. The old code refreshed nothing for
+        # the whole of this, however long it took.
+        watcher = open_database(settings.output_root, migrate_on_open=False)
+        try:
+            for _ in range(5):
+                seen.append(read_claim(watcher, settings.output_root)["heartbeat_at"])
+                clock.sleep(0.5)
+        finally:
+            watcher.close()
+
+    monkeypatch.setattr(Worker, "process_job", slow_job)
+    run_worker(settings, once=True)
+
+    assert seen, "the stand-in stage never ran"
+    assert len(set(seen)) > 1, f"the claim was never refreshed during the job: {seen}"
+
+
+def test_the_heartbeat_stops_when_the_worker_does(settings, db):
+    """A daemon thread that outlived its worker would go on refreshing a claim
+    for a process that had stopped doing any work."""
+    import threading as thread_module
+
+    before = {t.name for t in thread_module.enumerate()}
+    run_worker(settings, once=True)
+
+    lingering = [
+        t for t in thread_module.enumerate() if t.name == "worker-heartbeat" and t.is_alive()
+    ]
+    assert not lingering, "the heartbeat thread outlived the worker"
+    assert "worker-heartbeat" not in before
+
+
+def test_a_worker_that_loses_the_claim_stops(settings, db):
+    """Unchanged behaviour, now reached through the background beat as well as
+    the synchronous one."""
+    with worker_lock(db, settings.output_root) as owner_id:
+        worker = Worker(settings, db, worker_id="a-different-worker")
+        assert worker.beat() is False
+        assert worker.stopping is True
+        assert owner_id != "a-different-worker"
+
+
+def test_a_failed_beat_does_not_abandon_a_running_job(settings, db, monkeypatch, caplog):
+    """The claim only goes stale after several missed beats, and the next
+    attempt is seconds away. Tearing down a running job over one failed write
+    would turn a blip into lost work."""
+    import sqlite3 as sqlite
+
+    import app.worker.runner as runner_module
+
+    monkeypatch.setattr(runner_module, "HEARTBEAT_INTERVAL_SECONDS", 0.05)
+
+    beats: list[int] = []
+
+    def explode(*args, **kwargs):
+        beats.append(1)
+        raise sqlite.OperationalError("database is locked")
+
+    monkeypatch.setattr(runner_module, "heartbeat", explode)
+
+    worker = Worker(settings, db, worker_id="w1")
+    with worker.keeping_the_claim_fresh():
+        import time as clock
+
+        clock.sleep(0.3)
+        assert worker.stopping is False, "a failed beat must not stop the worker"
+
+    # It kept trying rather than dying on the first failure — the whole point.
+    assert len(beats) >= 2, f"the heartbeat gave up after {len(beats)} attempt(s)"

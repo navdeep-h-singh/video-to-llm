@@ -142,6 +142,14 @@ Bugs found by *running* it, across both:
   recorded and displayed but the worker read the *global* setting, so a job
   created with "skip descriptions" described everything anyway — on a paid
   provider, money spent on work the user explicitly declined.
+- **The worker's heartbeat only beat between jobs.** `beat()` was called at the
+  top of the run loop, so it did not run at all for the duration of a job — and
+  the long jobs are the entire point. Caught live: a worker seven hours into
+  describing 2,371 frames still held a heartbeat from before the job started, so
+  the header read "Stopped unexpectedly" while it was working perfectly, and a
+  second worker would have judged it dead and taken over the same output root.
+  Now a daemon thread with its own connection (sharing the worker's would
+  interleave with the stages' explicit transactions).
 - `HANDOFF.md` itself carried absolute home paths and had been failing the
   pre-publish audit since it was committed.
 
