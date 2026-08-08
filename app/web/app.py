@@ -1843,7 +1843,12 @@ def create_app(settings: Settings) -> FastAPI:
                     "   ELSE 0.0 END) AS percent"
                     " FROM stage_runs s"
                     " JOIN job_videos v ON v.id = s.job_video_id"
-                    " WHERE v.job_id = ? AND v.is_active_version = 1",
+                    " WHERE v.job_id = ? AND v.is_active_version = 1"
+                    # Latest attempt only, for the same reason the strip orders
+                    # by attempt: an abandoned earlier try sits at 0% forever and
+                    # would drag the average down for the rest of the job.
+                    " AND s.attempt = (SELECT MAX(s2.attempt) FROM stage_runs s2"
+                    "   WHERE s2.job_video_id = s.job_video_id AND s2.stage = s.stage)",
                     (row["id"],),
                 ).fetchone()
                 percent = round(totals["percent"] or 0.0)
@@ -2578,9 +2583,15 @@ def _stage_progress(
 
     formats = {"transcribe": as_clock}
 
+    # Ordered by attempt, which is the sequence `_begin_stage` maintains, and
+    # never by id — ids are random hex, so "the last row" was whichever attempt
+    # happened to sort highest. A retried stage then showed a dead attempt: a
+    # worker restarted mid-description left attempt 1 abandoned at no total, and
+    # the screen reported that while attempt 2 ran correctly beside it. The
+    # display was reading a corpse.
     rows = connection.execute(
         "SELECT stage, status, items_total, items_done, started_at FROM stage_runs"
-        " WHERE job_video_id = ? ORDER BY id",
+        " WHERE job_video_id = ? ORDER BY attempt",
         (job_video_id,),
     ).fetchall()
 

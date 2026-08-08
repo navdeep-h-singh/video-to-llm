@@ -188,3 +188,56 @@ def test_format_clock_and_format_duration_agree(db):
 
     for seconds in (0, 59, 60, 611, 3600, 4530):
         assert format_clock(seconds) == format_duration(seconds)
+
+
+# ── Retried stages ────────────────────────────────────────────────────────
+
+
+def _add_attempt(connection, *, run_id, stage, attempt, status, total, done):
+    connection.execute(
+        "INSERT INTO stage_runs (id, job_video_id, stage, attempt, status, items_total,"
+        " items_done, started_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (run_id, "j1v1", stage, attempt, status, total, done, utc_now(), utc_now(), utc_now()),
+    )
+    connection.commit()
+
+
+def test_a_retried_stage_shows_the_live_attempt_not_the_abandoned_one(client, db):
+    """Killing a worker mid-stage leaves the old attempt behind at no total.
+
+    The row ids are random hex, so ordering by id picked whichever attempt
+    happened to sort highest — and on a real machine that was the dead one. The
+    screen reported "Pending, 0%" for hours while the live attempt ran correctly
+    beside it. Ordering by attempt is the only ordering that means anything.
+
+    The ids here are chosen so the abandoned attempt sorts *after* the live one,
+    which is exactly the case that used to fail.
+    """
+    seed(db, stage="frames", status="completed", total=10, done=10)
+    _add_attempt(
+        db, run_id="zzz_dead", stage="visual", attempt=1, status="pending", total=None, done=0
+    )
+    _add_attempt(
+        db, run_id="aaa_live", stage="visual", attempt=2, status="running", total=1488, done=744
+    )
+
+    body = client.get("/jobs/j1").text
+
+    assert "744 of 1,488" in body, "the screen is reading the abandoned attempt"
+    assert "width: 50%" in body
+
+
+def test_the_percentage_ignores_an_abandoned_attempt(client, db):
+    """An earlier try stuck at 0% would drag the average down for the whole job."""
+    seed(db, stage="frames", status="completed", total=10, done=10)
+    _add_attempt(
+        db, run_id="zzz_dead", stage="visual", attempt=1, status="pending", total=None, done=0
+    )
+    _add_attempt(
+        db, run_id="aaa_live", stage="visual", attempt=2, status="running", total=100, done=50
+    )
+
+    payload = client.get("/api/progress").json()
+    # 100% of frames and 50% of the live visual attempt. The dead one is not a
+    # third data point.
+    assert payload["jobs"][0]["percent"] == 75
