@@ -678,3 +678,66 @@ def test_a_portable_handoff_copies_the_frames(tmp_path):
     assert result.copied_frames is True
     assert (result.frame_links[0] / "000000_t000000.jpg").is_file()
     assert not result.frame_links[0].is_symlink()
+
+
+# ── Progress is visible while the stage is still running ──────────────────
+
+
+def test_the_transcript_stage_reports_progress_another_process_can_read(settings, db, tmp_path):
+    """The interface is a separate process reading the same database.
+
+    So it is not enough that progress is recorded — it has to be *committed* and
+    readable from another connection while the stage is still going. That is the
+    whole difference between a bar that moves and the one that sat at 0% for an
+    hour before jumping to 100%.
+
+    The observing connection is opened separately and read from inside the
+    speech model's own call, which is as close to "what the web process sees
+    mid-stage" as a test can get without a second process.
+    """
+    source = make_video_with_silence(tmp_path / "src" / "talk.mp4", duration_seconds=12.0)
+    _make_job(db, settings, [source])
+
+    observer = open_database(settings.output_root, migrate_on_open=False)
+    seen: list[tuple[int | None, int | None]] = []
+
+    class WatchingTranscriber:
+        def transcribe_window(self, audio_path, start_seconds, end_seconds):
+            row = observer.execute(
+                "SELECT items_total, items_done FROM stage_runs"
+                " WHERE stage = 'transcribe' ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+            if row is not None:
+                seen.append((row["items_total"], row["items_done"]))
+            return [(0.1, min(1.0, end_seconds - start_seconds), "synthetic speech")]
+
+    context = StageContext(
+        connection=db,
+        settings=settings,
+        job_id="j1",
+        job_video_id="v1",
+        source_path=source.path,
+        output_dir=settings.output_root / "j1" / "v1",
+        interval_ms=2000,
+    )
+    try:
+        run_frames_stage(context)
+        run_transcription_stage(context, transcriber=WatchingTranscriber())
+    finally:
+        observer.close()
+
+    assert seen, "the stub was never called; the test proves nothing"
+
+    # The size of the work is published before any of it is done, so the bar has
+    # a denominator from the first moment rather than dividing by nothing.
+    assert seen[0][0], (
+        "items_total was still unset when transcription began — the bar has "
+        f"nothing to divide by and renders 0%. Saw {seen[0]}."
+    )
+
+    row = db.execute(
+        "SELECT items_total, items_done FROM stage_runs WHERE stage = 'transcribe'"
+        " ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    assert row["items_done"] > 0
+    assert row["items_total"] >= row["items_done"]

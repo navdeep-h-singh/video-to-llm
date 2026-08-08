@@ -62,11 +62,19 @@
       <div class="panel finished-banner" role="status">
         <div style="display:flex;align-items:flex-start;gap:var(--space-3);flex-wrap:wrap">
           <div style="flex:1;min-width:240px">
+            {#
+              Not "while you were away". This banner is driven by whether the
+              completion has been acknowledged, which is the right thing to
+              store — it survives a restart and an overnight suspension — but it
+              says nothing about where the user was. Someone who watched the job
+              finish was told they had missed it. The relative time below already
+              carries the "how long ago", so the heading only has to be true.
+            #}
             <h4 style="margin:0">
               {% if away | length == 1 %}
-                A job finished while you were away
+                A job finished
               {% else %}
-                {{ away | length }} jobs finished while you were away
+                {{ away | length }} jobs finished
               {% endif %}
             </h4>
             <ul style="margin:var(--space-2) 0 0;padding-left:var(--space-4);font-size:13.5px">
@@ -229,6 +237,28 @@
         if (!data.ok) { button.textContent = data.detail || "Could not open it"; }
       })
       .catch(function () { button.textContent = "Could not open it"; });
+  });
+
+  // A form that takes a noticeable moment — drawing the sample clip, building a
+  // collection — gives no sign it heard the first press, so people press again
+  // and get the work queued twice. Disabling on submit says "heard you" and
+  // makes the second press impossible.
+  //
+  // The label is replaced rather than only greyed out, because a disabled
+  // button with its original text reads as broken rather than as busy. The
+  // server refuses duplicates too: this is the courtesy, not the guarantee.
+  document.addEventListener("submit", function (event) {
+    var form = event.target;
+    if (!(form instanceof HTMLFormElement) || form.method.toLowerCase() !== "post") return;
+
+    var button = form.querySelector('button[type="submit"], button:not([type])');
+    if (!button || button.disabled) return;
+
+    var busy = button.getAttribute("data-busy-label");
+    window.setTimeout(function () {
+      button.disabled = true;
+      if (busy) { button.textContent = busy; }
+    }, 0);
   });
 </script>
 {% block scripts %}{% endblock %}

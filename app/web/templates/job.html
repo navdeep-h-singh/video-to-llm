@@ -7,14 +7,42 @@
   offered no way to stop, rename or delete a job at all. The controls existed,
   were tested at the route, and could not be reached.
 #}
-{% block title %}{{ job.name }} — Video to LLM{% endblock %}
+{#
+  Truncated as well as capped at entry. New names are limited when they are
+  typed, but a row imported from earlier output, or written before the limit
+  existed, can still be any length — and a two-thousand-character tab title is
+  the same defect arriving by a different door.
+#}
+{% block title %}{{ job.name | truncate(80, true, '…') }} — Video to LLM{% endblock %}
 {% block content %}
+{#
+  An action this screen offers may still be refused — a delete the database
+  would reject, a rerun on a job the worker is mid-way through. The refusal
+  belongs here, on the screen the button was pressed from, and not as a
+  redirect that looks like success.
+#}
+{% if problems %}
+<div class="panel" style="border-left:3px solid var(--color-accent)" role="alert">
+  <h4 style="margin:0 0 var(--space-2)">That did not happen</h4>
+  <ul style="margin:0;padding-left:var(--space-4);font-size:14px">
+    {% for problem in problems %}<li>{{ problem }}</li>{% endfor %}
+  </ul>
+</div>
+{% endif %}
 <div class="page-head">
   <div>
     <h1>{{ job.name }}</h1>
+    {#
+      "took" is past tense. A job still being processed has not taken its
+      elapsed time, it has been running for it — and the dashboard already said
+      "running", so the two screens disagreed about the same job.
+    #}
     <p class="page-sub">
       {{ videos|length }} video{{ '' if videos|length == 1 else 's' }}
-      {%- if elapsed and elapsed != '—' %} · took {{ elapsed }}{% endif %}
+      {%- if elapsed and elapsed != '—' %}
+        {%- if job.status in ("preparing", "transcribing", "analyzing", "waiting_retry") %} · running {{ elapsed }}
+        {%- else %} · took {{ elapsed }}{% endif %}
+      {%- endif %}
       {%- if total_size %} · {{ total_size }} on disk{% endif %}
     </p>
   </div>
@@ -30,7 +58,15 @@
       </form>
     {% endif %}
     <a class="btn btn-secondary" href="/jobs/{{ job.id }}/review">Review</a>
-    <a class="btn btn-secondary" href="/jobs/{{ job.id }}/rerun">Describe again</a>
+    {#
+      "again" is a claim about the past. A job processed with descriptions
+      turned off has never been described once, and offering to do it "again"
+      on a screen that says "Descriptions — Not run" contradicts the line above
+      the button.
+    #}
+    <a class="btn btn-secondary" href="/jobs/{{ job.id }}/rerun">
+      {%- if job.visual_provider in (None, "", "none") %}Describe{% else %}Describe again{% endif -%}
+    </a>
     <a class="btn btn-secondary" href="/jobs/{{ job.id }}/outputs">Files</a>
   </div>
 </div>
@@ -47,13 +83,28 @@
       <span style="margin-left:auto">{{ status(video.status) }}</span>
     </div>
     <div class="grid grid-4" style="margin-top:var(--space-2)">
+      {#
+        `stage.eta` and `stage.indeterminate` are read defensively. Templates
+        are re-read from disk on every request while route code stays in memory,
+        so a server started before this change serves this markup against the
+        old context — and a hard reference would 500 the job screen of whatever
+        was running at the time.
+      #}
       {% for stage in video.stages %}
       <div>
         <div style="display:flex;justify-content:space-between;font-size:12px">
           <span>{{ stage.label }}</span>
           <span class="text-muted">{{ stage.detail }}</span>
         </div>
-        {{ bar(stage.percent, accent=(stage.percent > 0 and stage.percent < 100)) }}
+        {% if stage.get('indeterminate') %}
+          <div class="bar bar-working" role="progressbar" aria-valuetext="Working"
+               aria-valuemin="0" aria-valuemax="100"><span></span></div>
+        {% else %}
+          {{ bar(stage.percent, accent=(stage.percent > 0 and stage.percent < 100)) }}
+        {% endif %}
+        {% if stage.get('eta') %}
+          <p class="text-muted" style="margin:var(--space-1) 0 0;font-size:11.5px">{{ stage.eta }}</p>
+        {% endif %}
       </div>
       {% endfor %}
     </div>

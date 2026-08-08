@@ -1,10 +1,11 @@
 # Security
 
-Two properties define this application's security posture, and both are enforced
-in code and covered by tests rather than left to convention:
+Three properties define this application's security posture, all enforced in
+code and covered by tests rather than left to convention:
 
 1. **It is reachable only from this computer.**
-2. **A credential never reaches disk in readable form.**
+2. **It acts only on requests from its own pages.**
+3. **A credential never reaches disk in readable form.**
 
 ---
 
@@ -15,11 +16,40 @@ setting, flag, environment variable, or hidden mode that changes this. `0.0.0.0`
 does not appear in the codebase, LAN access is not implemented, and a test
 asserts the bind address on every run.
 
-This is a deliberate design limit, not an oversight. The application has no
-authentication, no authorisation, and no session model, because it has no remote
-surface that would need them. Exposing it to a network — by port-forwarding it,
-tunnelling it, or putting a reverse proxy in front of it — removes the only
-control protecting your data and your provider credentials. Do not do it.
+This is a deliberate design limit, not an oversight. Exposing it to a network —
+by port-forwarding it, tunnelling it, or putting a reverse proxy in front of it —
+removes the main control protecting your data and your provider credentials. Do
+not do it.
+
+## The origin boundary
+
+Binding to loopback keeps other *machines* out. It does not, on its own, keep
+other *websites* out, and it is worth being exact about why.
+
+A page on any site you have open can submit a form to `127.0.0.1`. An
+urlencoded form post is what CORS calls a "simple request": it needs no
+preflight and asks nobody's permission. The attacker cannot read the reply, but
+plenty of damage needs no reply — deleting a job together with its files,
+removing a stored key, or starting a rerun that spends money. Separately, a
+hostname an attacker controls can be pointed at 127.0.0.1 (DNS rebinding), and
+then their page *is* same-origin and can read everything.
+
+So two checks run on every request, in one middleware, before any route:
+
+- **The `Host` must name this machine** — `127.0.0.1`, `localhost`, or `::1`.
+  Anything else is refused with `421`. This is what closes DNS rebinding.
+- **Anything that changes state, and every `/api/` read, must come from our own
+  pages.** `Sec-Fetch-Site` must be `same-origin` or `none`; where that header
+  is absent, `Origin` must be loopback. Anything else is refused with `403`.
+
+A browser cannot be told to omit `Origin` or to forge `Sec-Fetch-Site` on a
+cross-site request, so a request carrying neither is not a browser — it is
+`curl`, the CLI, or a test, and it is allowed. Treating absence as a refusal
+would break those without making any browser safer.
+
+This is why there is still no authentication, no authorisation, and no session
+model: the boundary is the origin, not a password. That holds only while the
+server stays on loopback, which is the previous section's rule.
 
 The Ollama endpoint is held to the same rule from the other direction: only
 `127.0.0.1`, `localhost`, and `::1` are accepted. A configured endpoint pointing

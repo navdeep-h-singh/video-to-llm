@@ -29,6 +29,12 @@ CANCELLABLE = frozenset(
 )
 
 
+#: Longest job name accepted. Names are shown in the list, on the job screen,
+#: in the collection picker, and in the browser tab title — an uncapped name
+#: turned a two-thousand-character paste into a two-thousand-character tab.
+MAX_NAME_LENGTH = 120
+
+
 class JobError(RuntimeError):
     pass
 
@@ -80,6 +86,14 @@ def create_job(
 
     if not name.strip():
         result.problems.append("The job needs a name.")
+        return result
+
+    if len(name.strip()) > MAX_NAME_LENGTH:
+        result.problems.append(
+            f"That name is {len(name.strip())} characters. Keep it to "
+            f"{MAX_NAME_LENGTH} or fewer so it stays readable in the list and in "
+            "the browser tab."
+        )
         return result
 
     if len(paths) > MAX_VIDEOS_PER_JOB:

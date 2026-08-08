@@ -3,7 +3,8 @@
 Settings come from three sources, later ones overriding earlier:
 
 1. the defaults in this module,
-2. ``config/settings.toml`` if present,
+2. the user's settings file if present — see :func:`settings_file`, which is in
+   the platform's application-support directory, not inside the installation,
 3. environment variables prefixed ``VIDEO_TO_LLM_``.
 
 The bind host is not among them. It is a constant, and :func:`assert_loopback`
@@ -14,6 +15,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import sys
 import tomllib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
@@ -259,8 +261,74 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
-def settings_file() -> Path:
+def user_config_dir() -> Path:
+    """Where this machine expects a user's application configuration to live."""
+    if os.name == "nt":
+        base = os.environ.get("APPDATA")
+        if base:
+            return Path(base) / "VideoToLLM"
+        return Path.home() / "AppData" / "Roaming" / "VideoToLLM"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "VideoToLLM"
+    return Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "video-to-llm"
+
+
+def legacy_settings_file() -> Path:
+    """Where settings used to be written: inside the application itself.
+
+    Kept only so an existing installation's configuration can be carried across
+    once. Nothing writes here any more.
+    """
     return repo_root() / "config" / "settings.toml"
+
+
+def default_settings_file() -> Path:
+    return user_config_dir() / "settings.toml"
+
+
+def settings_file() -> Path:
+    """The file settings are read from and written to.
+
+    This used to be ``config/settings.toml`` inside the application directory,
+    which made the user's configuration a property of the *installation* rather
+    than of the *user*. Three consequences, all real: an application installed
+    somewhere read-only could not save at all; two instances pointed at
+    different output roots silently shared one file, so configuring one
+    reconfigured the other; and upgrading by replacing the folder threw the
+    configuration away.
+
+    Overridable so a test never has to go near the real one.
+    """
+    override = os.environ.get(ENV_PREFIX + "CONFIG_FILE")
+    if override:
+        return Path(override).expanduser()
+    return default_settings_file()
+
+
+def adopt_legacy_settings(target: Path) -> None:
+    """Copy an in-application settings file to the user location, once.
+
+    Deliberately a copy and not a move: if someone downgrades, or this turns out
+    to be the wrong call, the original is still where it was. The old file stops
+    being read as soon as the new one exists.
+
+    Only ever runs for the real default location, so a test pointing
+    :func:`settings_file` at a temporary path cannot pull the operator's own
+    configuration into its fixture.
+    """
+    if target != default_settings_file() or target.exists():
+        return
+
+    legacy = legacy_settings_file()
+    if not legacy.is_file():
+        return
+
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(legacy.read_text(encoding="utf-8"), encoding="utf-8")
+    except OSError:
+        # Not fatal: the defaults still load, and the next save will try again.
+        return
 
 
 def _read_toml(path: Path) -> dict[str, Any]:
@@ -293,7 +361,14 @@ def load_settings(
 ) -> Settings:
     """Build a validated :class:`Settings` from file and environment."""
     environ = os.environ if env is None else env
-    data = _read_toml(path if path is not None else settings_file())
+
+    source = path if path is not None else settings_file()
+    if path is None:
+        # Carry an older installation's configuration across the first time it
+        # is missing from the user location. No-op afterwards, and never for a
+        # path a test has redirected.
+        adopt_legacy_settings(source)
+    data = _read_toml(source)
 
     general = data.get("general", {})
     server = data.get("server", {})
@@ -455,21 +530,76 @@ terminal_bell = {_toml_value(settings.notifications.terminal_bell)}
 """
 
 
+#: Top-level keys this version models. Anything else in the file belongs to a
+#: newer version, or to the user, and is not ours to discard.
+KNOWN_SECTIONS = frozenset(
+    {
+        "general",
+        "server",
+        "sampling",
+        "transcription",
+        "visual_analysis",
+        "ollama",
+        "worker",
+        "collections",
+        "notifications",
+        "log_level",
+    }
+)
+
+
+def render_unknown_toml(data: dict[str, Any]) -> str:
+    """Re-render the parts of a settings file this version does not model.
+
+    Saving used to rewrite the file from the dataclass alone, so any key the
+    running version did not know about vanished the first time the user pressed
+    Save on an unrelated section. That silently punishes anyone who edited the
+    file by hand, and it makes downgrading destructive: run an older build once
+    and the newer build's configuration is gone.
+
+    Kept verbatim rather than merged, and clearly labelled, so it is obvious
+    these lines were not written by this version.
+    """
+    leftovers = {key: value for key, value in data.items() if key not in KNOWN_SECTIONS}
+    if not leftovers:
+        return ""
+
+    lines = [
+        "",
+        "# ── Kept from the existing file ───────────────────────────────────",
+        "# This version of the application does not use these settings. They are",
+        "# preserved so that editing anything above does not discard them.",
+    ]
+    for key, value in sorted(leftovers.items()):
+        if isinstance(value, dict):
+            lines.append(f"\n[{key}]")
+            for inner_key, inner_value in value.items():
+                lines.append(f"{inner_key} = {_toml_value(inner_value)}")
+        else:
+            lines.append(f"{key} = {_toml_value(value)}")
+    return "\n".join(lines) + "\n"
+
+
 def save_settings(settings: Settings, *, path: Path | None = None) -> Path:
     """Validate, then write settings to disk atomically.
 
     Validation runs first so an unusable configuration is refused rather than
     written — a settings file that stops the application from starting is much
     harder to recover from than a rejected form.
+
+    Whatever the existing file held that this version does not model is carried
+    across; see :func:`render_unknown_toml`.
     """
     settings.validate()
 
     target = Path(path) if path is not None else settings_file()
     target.parent.mkdir(parents=True, exist_ok=True)
 
+    preserved = render_unknown_toml(_read_toml(target))
+
     # Imported here rather than at module scope: artifacts imports the logging
     # module, which imports redaction, and config is loaded before either.
     from app.core.artifacts import write_text
 
-    write_text(target, render_settings_toml(settings))
+    write_text(target, render_settings_toml(settings) + preserved)
     return target

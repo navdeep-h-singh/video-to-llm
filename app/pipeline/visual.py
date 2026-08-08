@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -144,20 +145,41 @@ def run_visual_analysis(
     budget: BudgetTracker | None = None,
     retry_policy: RetryPolicy | None = None,
     should_stop: Any = None,
+    on_progress: Callable[[int], None] | None = None,
 ) -> VisualStageResult:
-    """Describe every batch, persisting each one before marking it complete."""
+    """Describe every batch, persisting each one before marking it complete.
+
+    ``on_progress`` receives the running count of pictures this stage has dealt
+    with — described, skipped, or recognised as already done on a resume. All
+    three have moved the run forward, and a counter that only advanced on
+    success would stall on a video whose pictures were mostly carried over,
+    which is exactly the resume case where someone is most anxious to see
+    movement.
+
+    This is the stage that most needs it. A local model at roughly half a minute
+    a picture turns a fifteen-hundred-frame video into most of a day, and until
+    now every minute of that looked identical to a hang.
+    """
     result = VisualStageResult()
     output_dir = Path(output_dir)
     batch_dir = output_dir / BATCH_DIRNAME
     already_done = completed_batch_indexes(connection, stage_run_id)
     running_cost = 0.0
     charged = False
+    frames_seen = 0
+
+    def moved_past(request: AnalysisRequest) -> None:
+        nonlocal frames_seen
+        frames_seen += len(request.frames)
+        if on_progress is not None:
+            on_progress(frames_seen)
 
     for batch_index, request in enumerate(requests):
         if batch_index in already_done:
             # Resuming: this batch is already paid for and on disk.
             result.batches_skipped += 1
             logger.debug("Batch %d already completed; not sending again", batch_index)
+            moved_past(request)
             continue
 
         if should_stop is not None and should_stop():
@@ -192,6 +214,7 @@ def run_visual_analysis(
                 attempts=len(outcome.history),
                 retry_history=[r.as_dict() for r in outcome.history],
             )
+            moved_past(request)
             continue
 
         analysis: AnalysisResult = outcome.result
@@ -240,6 +263,7 @@ def run_visual_analysis(
 
         result.descriptions.extend(analysis.descriptions)
         result.batches_sent += 1
+        moved_past(request)
 
         if analysis.cost_usd is not None:
             charged = True

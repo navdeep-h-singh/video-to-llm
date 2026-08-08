@@ -20,6 +20,7 @@ from app.core.config import Settings, VisualAnalysisSettings
 from app.core.db import open_database, utc_now
 from app.web import status as status_module
 from app.web.app import create_app
+from tests.loopback import LOOPBACK_BASE_URL
 
 
 @pytest.fixture
@@ -36,7 +37,7 @@ def db(settings):
 
 @pytest.fixture
 def client(settings, db):
-    with TestClient(create_app(settings)) as test_client:
+    with TestClient(create_app(settings), base_url=LOOPBACK_BASE_URL) as test_client:
         yield test_client
 
 
@@ -105,21 +106,25 @@ def test_the_review_and_outputs_screens_render(client, db):
 
 
 def test_an_unknown_job_says_so_rather_than_erroring(client, db):
+    # 404, not 200. The page explains itself to the person, and the status line
+    # says the same thing to the browser, the history, and anything scripted
+    # against it. Answering 200 for something that is not there means a stale
+    # bookmark looks identical to a live job.
     seed_job(db)
     response = client.get("/jobs/does-not-exist")
-    assert response.status_code == 200
+    assert response.status_code == 404
     assert "could not be found" in response.text
 
 
 def test_an_unknown_collection_says_so(client, db):
     response = client.get("/collections/does-not-exist")
-    assert response.status_code == 200
+    assert response.status_code == 404
     assert "could not be found" in response.text
 
 
 def test_a_machine_with_no_output_folder_goes_to_the_readiness_screen(tmp_path):
     # An empty dashboard explains nothing to a first-time user.
-    with TestClient(create_app(Settings())) as client:
+    with TestClient(create_app(Settings()), base_url=LOOPBACK_BASE_URL) as client:
         response = client.get("/", follow_redirects=False)
     assert response.status_code == 303
     assert response.headers["location"] == "/launch"
@@ -233,7 +238,7 @@ def test_local_descriptions_report_no_provider_charge_not_zero(client, tmp_path)
         )
     ).with_output_root(tmp_path / "out")
 
-    with TestClient(create_app(settings)) as client_local:
+    with TestClient(create_app(settings), base_url=LOOPBACK_BASE_URL) as client_local:
         body = client_local.get("/settings").text
 
     assert "No provider API charge" in body
@@ -405,8 +410,34 @@ def test_the_progress_endpoint_returns_json(client, db):
     response = client.get("/api/progress")
     assert response.status_code == 200
     payload = response.json()
-    assert payload["jobs"][0]["total"] == 1265
-    assert payload["jobs"][0]["done"] == 1265
+    # A percentage, not raw counts. Stages measure in different units — the
+    # transcript counts seconds of video, the others count pictures — so the
+    # old summed total was pictures-plus-seconds, a number with no meaning.
+    assert payload["jobs"][0]["percent"] == 100
+
+
+def test_the_progress_percentage_never_mixes_units(client, db):
+    """A completed frames stage and a half-done transcript must not be added up.
+
+    Summing items_done across stages once produced 1,265 pictures + 900 seconds
+    = 2,165 "things", against a total in the same invented unit. Averaging the
+    stages' own percentages is the only figure that means anything.
+    """
+    seed_job(db)
+    db.execute(
+        "INSERT INTO stage_runs (id, job_video_id, stage, status, items_total,"
+        " items_done, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+        ("s1", "j1v1", "frames", "completed", 1265, 1265, utc_now(), utc_now()),
+    )
+    db.execute(
+        "INSERT INTO stage_runs (id, job_video_id, stage, status, items_total,"
+        " items_done, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+        ("s2", "j1v1", "transcribe", "running", 1800, 900, utc_now(), utc_now()),
+    )
+
+    payload = client.get("/api/progress").json()
+    # 100% of one stage and 50% of the other.
+    assert payload["jobs"][0]["percent"] == 75
 
 
 def test_progress_can_be_scoped_to_one_job(client, db):
@@ -811,7 +842,7 @@ def describing_client(settings, describable):
             enabled=True, provider="ollama_local", model_id="qwen2.5vl:7b"
         ),
     )
-    with TestClient(create_app(configured)) as test_client:
+    with TestClient(create_app(configured), base_url=LOOPBACK_BASE_URL) as test_client:
         yield test_client
 
 
@@ -899,12 +930,16 @@ def finish_job(connection, job_id="j1", *, status="completed"):
     connection.commit()
 
 
-def test_a_job_that_finished_while_you_were_away_is_reported(client, db):
+def test_a_job_that_finished_unacknowledged_is_reported(client, db):
+    # The heading no longer claims the user was away: the flag records whether
+    # the completion has been acknowledged, which says nothing about where they
+    # were, and someone watching the job finish was being told they missed it.
     seed_job(db)
     finish_job(db)
 
     body = client.get("/").text
-    assert "finished while you were away" in body
+    assert "A job finished" in body
+    assert "while you were away" not in body
     assert "Session review" in body
 
 
@@ -914,11 +949,11 @@ def test_the_banner_survives_a_restart(client, db, settings):
     seed_job(db)
     finish_job(db)
 
-    assert "finished while you were away" in client.get("/").text
+    assert "A job finished" in client.get("/").text
 
     # A completely new application object, as if the server had been restarted.
-    with TestClient(create_app(settings)) as restarted:
-        assert "finished while you were away" in restarted.get("/").text
+    with TestClient(create_app(settings), base_url=LOOPBACK_BASE_URL) as restarted:
+        assert "A job finished" in restarted.get("/").text
 
 
 def test_dismissing_the_banner_stops_it_coming_back(client, db):
@@ -1098,7 +1133,8 @@ def test_every_screen_renders_for_a_job_with_no_videos(client, db, template):
     db.commit()
 
     response = client.get(template.format(job="bare"))
-    assert response.status_code == 200, f"{template} broke on a job with no videos"
+    assert response.status_code < 500, f"{template} broke on a job with no videos"
+    assert "Video to LLM" in response.text, f"{template} did not render a page"
 
 
 @pytest.mark.parametrize("template", ALL_SCREENS)
@@ -1116,4 +1152,5 @@ def test_every_screen_renders_when_the_output_folder_is_empty(client, db, templa
 def test_every_screen_renders_on_a_completely_empty_install(client, template):
     """No jobs at all. The first thing anyone sees."""
     response = client.get(template.format(job="does-not-exist"))
-    assert response.status_code == 200, f"{template} broke on an empty install"
+    assert response.status_code < 500, f"{template} broke on an empty install"
+    assert "Video to LLM" in response.text, f"{template} did not render a page"

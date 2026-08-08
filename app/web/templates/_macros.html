@@ -33,7 +33,8 @@
 #}
 {% macro sample_button(style="btn-secondary") %}
 <form method="post" action="/sample" style="display:inline">
-  <button class="btn {{ style }}" type="submit">Try it with a generated sample</button>
+  <button class="btn {{ style }}" type="submit"
+          data-busy-label="Drawing the sample…">Try it with a generated sample</button>
 </form>
 {% endmacro %}
 

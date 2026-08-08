@@ -19,6 +19,7 @@ from app.core.config import Settings, load_settings, render_settings_toml, save_
 from app.core.db import open_database
 from app.providers.base import ProviderHealth
 from app.web.app import create_app
+from tests.loopback import LOOPBACK_BASE_URL
 
 
 @pytest.fixture
@@ -38,7 +39,7 @@ def settings_path(tmp_path, monkeypatch):
 def client(settings, settings_path):
     connection = open_database(settings.output_root)
     connection.close()
-    with TestClient(create_app(settings)) as test_client:
+    with TestClient(create_app(settings), base_url=LOOPBACK_BASE_URL) as test_client:
         yield test_client
 
 
@@ -422,12 +423,20 @@ def test_an_unhandled_error_explains_itself_instead_of_saying_nothing():
     def broken(request: Request) -> None:
         raise RuntimeError("a synthetic failure")
 
-    with TestClient(app, raise_server_exceptions=False) as broken_client:
+    with TestClient(
+        app, raise_server_exceptions=False, base_url=LOOPBACK_BASE_URL
+    ) as broken_client:
         response = broken_client.get("/deliberately-broken")
 
     assert response.status_code == 500
-    assert "Your jobs and files are unaffected" in response.text
     assert "start it again" in response.text
+
+    # The page must not promise that nothing was affected. It is rendered by a
+    # catch-all handler, including for a request that had already started
+    # changing things when it failed — so that reassurance was sometimes a lie,
+    # and it was most likely to be shown exactly when it was untrue.
+    assert "unaffected" not in response.text
+    assert "Nothing was lost" not in response.text
 
 
 def test_the_error_page_does_not_leak_the_exception():
@@ -445,7 +454,9 @@ def test_the_error_page_does_not_leak_the_exception():
     def broken(request: Request) -> None:
         raise RuntimeError(f"failed while using {secret}")
 
-    with TestClient(app, raise_server_exceptions=False) as broken_client:
+    with TestClient(
+        app, raise_server_exceptions=False, base_url=LOOPBACK_BASE_URL
+    ) as broken_client:
         response = broken_client.get("/deliberately-broken")
 
     assert secret not in response.text

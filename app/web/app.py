@@ -40,6 +40,192 @@ logger = get_logger(__name__)
 TEMPLATE_DIR = Path(__file__).parent / "templates"
 STATIC_DIR = Path(__file__).parent / "static"
 
+#: Methods that cannot change state, and so need no origin check.
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+#: ``Sec-Fetch-Site`` values that mean "this request came from us".
+#: ``none`` is a user-initiated navigation — typing the address, a bookmark.
+SAME_ORIGIN_FETCH_SITES = frozenset({"same-origin", "none"})
+
+
+def hostname_of(value: str) -> str:
+    """The host in a ``Host`` or ``Origin`` header, without scheme or port.
+
+    Handles the bracketed IPv6 form (``[::1]:8712``) and leaves a bare IPv6
+    literal alone, so ``::1`` is not mistaken for a host called ``:`` with a
+    port.
+    """
+    candidate = value.strip()
+    if "//" in candidate:
+        candidate = candidate.split("//", 1)[1]
+    candidate = candidate.split("/", 1)[0]
+
+    if candidate.startswith("["):
+        closing = candidate.find("]")
+        if closing != -1:
+            return candidate[1:closing]
+
+    # Exactly one colon is host:port. Two or more is a bare IPv6 literal.
+    if candidate.count(":") == 1:
+        candidate = candidate.split(":", 1)[0]
+    return candidate
+
+
+def whole_number(raw: str, fallback: int = 0) -> int:
+    """A query parameter read as an integer, never as a validation error.
+
+    Declaring these as ``int`` let FastAPI reject ``?frame=abc`` with a raw 422
+    JSON body — a framework error page, in a product whose every other failure
+    is a sentence in plain English. A hand-edited address, a stale bookmark, or
+    a link someone pasted into a chat should land on the picture, not on a
+    schema dump. Out-of-range values are already clamped by the caller, so
+    coercing here is the whole fix.
+    """
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return fallback
+
+
+#: Bounds on the collection form's numbers. Below the minimum a pack cannot hold
+#: a single section; above the maximum no model anyone is targeting has a window
+#: that large, so the figure is a typo rather than an intention.
+MIN_TOKEN_LIMIT = 1_000
+MAX_TOKEN_LIMIT = 10_000_000
+
+
+def collection_numbers(raw_limit: str, raw_reserve: str) -> tuple[list[str], int, int]:
+    """Validate the token limit and reserve, returning problems and the values.
+
+    Declared as integers, these produced a raw 422 for anything non-numeric. And
+    a reserve larger than the limit was accepted: ``usable_budget`` clamps at
+    zero, so nothing crashed — the build simply had no room for any section and
+    produced a collection that was silently useless. A number the form cannot
+    honour should be refused on the form.
+    """
+    problems: list[str] = []
+
+    limit = whole_number(raw_limit, -1)
+    reserve = whole_number(raw_reserve, -1)
+
+    if limit < 0:
+        problems.append("The token limit must be a whole number.")
+    elif not MIN_TOKEN_LIMIT <= limit <= MAX_TOKEN_LIMIT:
+        problems.append(
+            f"The token limit must be between {MIN_TOKEN_LIMIT:,} and {MAX_TOKEN_LIMIT:,}."
+        )
+
+    if reserve < 0:
+        problems.append("The reserve must be a whole number, and cannot be negative.")
+    elif limit >= 0 and reserve >= limit:
+        problems.append(
+            f"The reserve ({reserve:,}) leaves no room inside the limit "
+            f"({limit:,}). Lower the reserve, or raise the limit."
+        )
+
+    return problems, limit, reserve
+
+
+#: Statuses in which the worker may be writing into the job's folder right now.
+IN_FLIGHT_STATES = frozenset({"preparing", "transcribing", "analyzing", "waiting_retry"})
+
+
+def in_flight_reason(connection: sqlite3.Connection, job_id: str) -> str:
+    """Why this job cannot be disturbed right now, or an empty string.
+
+    The worker owns a job while it runs. Deleting its folder, resetting its
+    status, or queueing more work on top all reach past that ownership, and the
+    worker has no way to notice — it is a separate process holding open file
+    handles into a directory the interface just removed.
+    """
+    row = connection.execute("SELECT status, name FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    if row is None or row["status"] not in IN_FLIGHT_STATES:
+        return ""
+    return (
+        f"{row['name']} is being processed right now. Stop it first — "
+        "changing it while the worker is writing would leave the job and the "
+        "files on disk disagreeing."
+    )
+
+
+def collections_using(connection: sqlite3.Connection, job_id: str) -> list[str]:
+    """Names of collections that cite a video from this job.
+
+    A collection pins the exact source version it was built from, which is why
+    ``collection_sources`` holds an unqualified reference to ``job_videos``:
+    reprocessing a video must never rewrite a collection that already went out.
+    That same reference means deleting the job is refused by the database, so it
+    has to be refused by the interface first — with the names, because "this is
+    in use" without saying by what is a dead end.
+    """
+    rows = connection.execute(
+        "SELECT DISTINCT c.name FROM collections c"
+        " JOIN collection_sources cs ON cs.collection_id = c.id"
+        " JOIN job_videos jv ON jv.id = cs.job_video_id"
+        " WHERE jv.job_id = ? ORDER BY c.name",
+        (job_id,),
+    ).fetchall()
+    return [row["name"] for row in rows]
+
+
+def foreign_host(request: Request) -> str:
+    """Why this request's ``Host`` is not this machine, or an empty string.
+
+    Binding to loopback stops other machines connecting directly. It does not
+    stop a hostname that *resolves* to 127.0.0.1 — DNS rebinding — and a request
+    arriving under an attacker's hostname is same-origin as far as the browser
+    is concerned, so the response becomes readable by that attacker's page.
+    Checking the name the client asked for is what closes that.
+    """
+    from app.core.config import is_loopback_host
+
+    header = request.headers.get("host")
+    if header is None:
+        return ""
+    if is_loopback_host(hostname_of(header)):
+        return ""
+    return (
+        "This application answers only to 127.0.0.1, localhost, or ::1. "
+        f"It was asked for {hostname_of(header)!r}."
+    )
+
+
+def foreign_origin(request: Request) -> str:
+    """Why this request came from another site, or an empty string.
+
+    Loopback binding keeps other *machines* out; it does nothing about other
+    *origins*. A urlencoded form post is a CORS "simple request", so it needs no
+    preflight and no consent: any page the user has open in any tab can submit a
+    form to this server. Without this check every state-changing route is
+    callable by any website the user visits — creating jobs, removing a stored
+    key, spending money on a rerun, or deleting a job together with its files.
+
+    A page cannot make the browser omit ``Origin`` or forge ``Sec-Fetch-Site``
+    on a cross-site request. So the absence of both is read as a non-browser
+    client — curl, the CLI, a test — and allowed. Treating absence as a refusal
+    would break every one of those without making a browser any safer.
+    """
+    from app.core.config import is_loopback_host
+
+    fetch_site = request.headers.get("sec-fetch-site")
+    if fetch_site is not None:
+        if fetch_site.strip().lower() in SAME_ORIGIN_FETCH_SITES:
+            return ""
+        return (
+            "This request came from another site. This application accepts "
+            "actions only from its own pages."
+        )
+
+    origin = request.headers.get("origin")
+    if origin is None:
+        return ""
+    if origin.strip().lower() == "null" or not is_loopback_host(hostname_of(origin)):
+        return (
+            "This request came from another site. This application accepts "
+            "actions only from its own pages."
+        )
+    return ""
+
 
 @dataclass
 class NavItem:
@@ -76,6 +262,33 @@ def create_app(settings: Settings) -> FastAPI:
         openapi_url=None,
     )
     app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+    # ── The origin boundary ───────────────────────────────────────────────
+
+    @app.middleware("http")
+    async def refuse_foreign_callers(request: Request, call_next: Any) -> Response:
+        """Refuse requests from another hostname or another site.
+
+        One place rather than a decorator per route: this has to cover every
+        route that exists and every route added later, and a check you have to
+        remember to apply is a check that will eventually be forgotten.
+
+        ``/api/`` is held to the origin rule on reads too. Those endpoints return
+        data rather than a page — the file picker lists directories — and a read
+        primitive deserves the same boundary as a write.
+        """
+        problem = foreign_host(request)
+        if problem:
+            return PlainTextResponse(problem, status_code=421)
+
+        guarded = request.method not in SAFE_METHODS or request.url.path.startswith("/api/")
+        if guarded:
+            problem = foreign_origin(request)
+            if problem:
+                return PlainTextResponse(problem, status_code=403)
+
+        response: Response = await call_next(request)
+        return response
 
     def asset_version() -> str:
         """A cache key derived from the stylesheet's modification time.
@@ -394,6 +607,21 @@ def create_app(settings: Settings) -> FastAPI:
 
     @app.get("/jobs/{job_id}", response_class=HTMLResponse)
     def job_detail(request: Request, job_id: str) -> Response:
+        return render_job(request, job_id)
+
+    def render_job(
+        request: Request,
+        job_id: str,
+        problems: list[str] | None = None,
+        status_code: int = 200,
+    ) -> Response:
+        """The job screen, optionally carrying a refusal.
+
+        Separate from the route so an action that cannot be carried out — a
+        delete the database would reject, a rerun on a job already running — can
+        say so on the screen the user pressed the button from, rather than
+        redirecting to a page that looks as though it worked.
+        """
         connection = connect()
         try:
             if connection is None:
@@ -401,7 +629,7 @@ def create_app(settings: Settings) -> FastAPI:
 
             job = connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
             if job is None:
-                return page(request, "notfound.html", "dashboard", what="job")
+                return page(request, "notfound.html", "dashboard", what="job", status_code=404)
 
             videos = [
                 {
@@ -454,12 +682,14 @@ def create_app(settings: Settings) -> FastAPI:
             request,
             "job.html",
             "dashboard",
+            status_code=status_code,
             job=job,
             job_status=status_module.present(job["status"]),
             videos=videos,
             events=events,
             elapsed=status_module.format_elapsed(job["started_at"], job["completed_at"]),
             total_size=total_size,
+            problems=problems or [],
         )
 
     @app.get("/imports", response_class=HTMLResponse)
@@ -553,7 +783,7 @@ def create_app(settings: Settings) -> FastAPI:
                 connection.close()
 
         if collection is None:
-            return page(request, "notfound.html", "collections", what="collection")
+            return page(request, "notfound.html", "collections", what="collection", status_code=404)
         return page(
             request,
             "collection.html",
@@ -563,7 +793,13 @@ def create_app(settings: Settings) -> FastAPI:
         )
 
     @app.get("/jobs/{job_id}/review", response_class=HTMLResponse)
-    def review(request: Request, job_id: str, video: str = "", frame: int = 0) -> Response:
+    def review(
+        request: Request,
+        job_id: str,
+        video: str = "",
+        frame: str = "",
+        picture: str = "",
+    ) -> Response:
         """The frame viewer: one picture, its description, and the words around it.
 
         This is the screen the whole pipeline exists to feed. It reads the frame
@@ -609,7 +845,11 @@ def create_app(settings: Settings) -> FastAPI:
                     for entry in payload.get("descriptions", []):
                         descriptions[int(entry.get("index", -1))] = entry
 
-            position = max(0, min(frame, len(frames) - 1)) if frames else 0
+            # `picture` is the number printed under the image and typed into the
+            # jump box, counting from one. `frame` is the internal index counting
+            # from zero, still accepted so older links keep working.
+            requested = whole_number(picture, 1) - 1 if picture else whole_number(frame, 0)
+            position = max(0, min(requested, len(frames) - 1)) if frames else 0
             active = frames[position] if frames else None
 
             # The transcript line nearest this frame, so the words and the
@@ -665,7 +905,9 @@ def create_app(settings: Settings) -> FastAPI:
             connection.close()
 
     @app.get("/jobs/{job_id}/frames", response_class=HTMLResponse)
-    def contact_sheet(request: Request, job_id: str, video: str = "", page_no: int = 0) -> Response:
+    def contact_sheet(
+        request: Request, job_id: str, video: str = "", page_no: str = "0"
+    ) -> Response:
         """A grid of every extracted frame, paged.
 
         Scanning two thousand frames for the interesting moments is not something
@@ -694,7 +936,7 @@ def create_app(settings: Settings) -> FastAPI:
                 frames = frame_listing(Path(root) / chosen["output_dir"] / "frames")
 
             total_pages = max(1, (len(frames) + per_page - 1) // per_page)
-            current_page = max(0, min(page_no, total_pages - 1))
+            current_page = max(0, min(whole_number(page_no), total_pages - 1))
             start = current_page * per_page
 
             return page(
@@ -829,41 +1071,54 @@ def create_app(settings: Settings) -> FastAPI:
         finally:
             connection.close()
 
+    def job_control(request: Request, job_id: str, act: Any, verb: str) -> Response:
+        """Run a pause/resume/cancel and report it when it does not apply.
+
+        All three used to redirect to the job screen whether or not anything had
+        happened. Pressing "Pause" on a job that had already finished looked
+        exactly like pressing it on one that was running: the page reloaded and
+        nothing was different, with nothing to say why. A control that reports
+        nothing is indistinguishable from a control that does nothing.
+        """
+        connection = connect()
+        if connection is None:
+            return RedirectResponse("/", status_code=303)
+        try:
+            job = connection.execute(
+                "SELECT id, status FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            if job is None:
+                return page(request, "notfound.html", "dashboard", what="job", status_code=404)
+
+            if not act(connection, job_id):
+                current_label = status_module.present(job["status"]).label
+                return render_job(
+                    request,
+                    job_id,
+                    problems=[f"This job cannot be {verb} — it is {current_label.lower()}."],
+                    status_code=409,
+                )
+        finally:
+            connection.close()
+        return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+
     @app.post("/jobs/{job_id}/pause")
-    def pause_route(job_id: str) -> Response:
+    def pause_route(request: Request, job_id: str) -> Response:
         from app.services.jobs import pause_job
 
-        connection = connect()
-        if connection is not None:
-            try:
-                pause_job(connection, job_id)
-            finally:
-                connection.close()
-        return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+        return job_control(request, job_id, pause_job, "paused")
 
     @app.post("/jobs/{job_id}/resume")
-    def resume_route(job_id: str) -> Response:
+    def resume_route(request: Request, job_id: str) -> Response:
         from app.services.jobs import resume_job
 
-        connection = connect()
-        if connection is not None:
-            try:
-                resume_job(connection, job_id)
-            finally:
-                connection.close()
-        return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+        return job_control(request, job_id, resume_job, "started again")
 
     @app.post("/jobs/{job_id}/cancel")
-    def cancel_route(job_id: str) -> Response:
+    def cancel_route(request: Request, job_id: str) -> Response:
         from app.services.jobs import cancel_job
 
-        connection = connect()
-        if connection is not None:
-            try:
-                cancel_job(connection, job_id)
-            finally:
-                connection.close()
-        return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+        return job_control(request, job_id, cancel_job, "stopped")
 
     def ordered_selection(order: str, video: list[str], version: list[str]) -> list[str]:
         """Turn the form's choices into job_video_ids, in the user's own order.
@@ -921,8 +1176,8 @@ def create_app(settings: Settings) -> FastAPI:
     @app.post("/api/collections/estimate")
     def estimate_collection(
         mode: str = Form("full"),
-        token_limit: int = Form(200000),
-        reserve_tokens: int = Form(20000),
+        token_limit: str = Form("200000"),
+        reserve_tokens: str = Form("20000"),
         allow_video_split: str = Form(""),
         order: str = Form(""),
         video: list[str] = Form(default=[]),
@@ -946,14 +1201,18 @@ def create_app(settings: Settings) -> FastAPI:
             if not chosen:
                 return JSONResponse({"ready": False, "detail": "No videos chosen yet."})
 
+            problems, limit, reserve = collection_numbers(token_limit, reserve_tokens)
+            if problems:
+                return JSONResponse({"ready": False, "detail": " ".join(problems)})
+
             collection = transient_collection(
                 connection,
                 root,
                 chosen,
                 name="",
                 mode=mode,
-                token_limit=token_limit,
-                reserve_tokens=reserve_tokens,
+                token_limit=limit,
+                reserve_tokens=reserve,
                 allow_video_split=bool(allow_video_split),
             )
             preview = preview_build(collection, output_root=root)
@@ -979,8 +1238,8 @@ def create_app(settings: Settings) -> FastAPI:
         request: Request,
         name: str = Form(""),
         mode: str = Form("full"),
-        token_limit: int = Form(200000),
-        reserve_tokens: int = Form(20000),
+        token_limit: str = Form("200000"),
+        reserve_tokens: str = Form("20000"),
         target_model_label: str = Form(""),
         allow_video_split: str = Form(""),
         order: str = Form(""),
@@ -1002,21 +1261,44 @@ def create_app(settings: Settings) -> FastAPI:
 
         try:
             chosen = ordered_selection(order, video, version)
+            problems: list[str] = []
             if not name.strip() or not chosen:
+                problems.append("Give the collection a name and choose at least one video.")
+
+            number_problems, limit, reserve = collection_numbers(token_limit, reserve_tokens)
+            problems.extend(number_problems)
+
+            # Building runs the real packer, so the form takes a moment and gets
+            # submitted twice — which used to produce two identical collections
+            # with the same name, and no way to tell them apart afterwards. A
+            # name already in use is refused whatever caused it: a second press,
+            # or genuinely reusing a name that is already taken.
+            if name.strip():
+                clash = connection.execute(
+                    "SELECT id FROM collections WHERE name = ? LIMIT 1", (name.strip(),)
+                ).fetchone()
+                if clash is not None:
+                    problems.append(
+                        f"A collection called “{name.strip()}” already exists. "
+                        "Give this one a different name, or open the existing one."
+                    )
+
+            if problems:
                 return page(
                     request,
                     "newcollection.html",
                     "newcollection",
                     candidates=collection_candidates(connection, root),
-                    problems=["Give the collection a name and choose at least one video."],
+                    problems=problems,
+                    status_code=400,
                 )
 
             collection_id = create_collection(
                 connection,
                 name=name,
                 mode=mode,
-                token_limit=token_limit,
-                reserve_tokens=reserve_tokens,
+                token_limit=limit,
+                reserve_tokens=reserve,
                 target_model_label=target_model_label,
                 allow_video_split=bool(allow_video_split),
             )
@@ -1548,16 +1830,23 @@ def create_app(settings: Settings) -> FastAPI:
             for row in rows:
                 # Every column is qualified: `status` exists on both stage_runs
                 # and job_videos, and an unqualified reference is ambiguous.
+                # Averaged per stage, never summed across them. Stages count in
+                # different units — the transcript measures seconds of video and
+                # the others count pictures — so adding items_done together once
+                # produced a total of pictures-plus-seconds, a number that means
+                # nothing and moved at two different rates.
                 totals = connection.execute(
-                    "SELECT COALESCE(SUM(s.items_done), 0) AS done,"
-                    "       COALESCE(SUM(s.items_total), 0) AS total"
+                    "SELECT AVG(CASE"
+                    "   WHEN s.status IN ('completed', 'completed_with_gaps') THEN 100.0"
+                    "   WHEN COALESCE(s.items_total, 0) > 0"
+                    "     THEN MIN(100.0, s.items_done * 100.0 / s.items_total)"
+                    "   ELSE 0.0 END) AS percent"
                     " FROM stage_runs s"
                     " JOIN job_videos v ON v.id = s.job_video_id"
                     " WHERE v.job_id = ? AND v.is_active_version = 1",
                     (row["id"],),
                 ).fetchone()
-                done = int(totals["done"] or 0)
-                total = int(totals["total"] or 0)
+                percent = round(totals["percent"] or 0.0)
                 jobs.append(
                     {
                         "id": row["id"],
@@ -1567,8 +1856,7 @@ def create_app(settings: Settings) -> FastAPI:
                         "status": row["status"],
                         "label": status_module.present(row["status"]).label,
                         "updated": status_module.format_relative(row["updated_at"]),
-                        "done": done,
-                        "total": total,
+                        "percent": percent,
                         "running": status_module.is_running(row["status"]),
                     }
                 )
@@ -1613,6 +1901,20 @@ def create_app(settings: Settings) -> FastAPI:
             return RedirectResponse("/launch", status_code=303)
 
         try:
+            # Drawing the clip takes a couple of seconds with no feedback, so a
+            # second press is the expected thing for a person to do — and it used
+            # to make a second identical job, doubling the work on the one screen
+            # a first-time user is most likely to be watching. An unfinished
+            # sample already in the queue is the answer to "start the sample".
+            waiting = connection.execute(
+                "SELECT id FROM jobs WHERE name = ? AND status IN"
+                " ('ready','preparing','transcribing','analyzing','waiting_retry')"
+                " ORDER BY created_at DESC LIMIT 1",
+                ("Sample — generated test footage",),
+            ).fetchone()
+            if waiting is not None:
+                return RedirectResponse(f"/jobs/{waiting['id']}", status_code=303)
+
             try:
                 clip = generate_sample(root)
             except SampleError as error:
@@ -1675,7 +1977,7 @@ def create_app(settings: Settings) -> FastAPI:
         try:
             job = connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
             if job is None:
-                return page(request, "notfound.html", "dashboard", what="job")
+                return page(request, "notfound.html", "dashboard", what="job", status_code=404)
 
             videos = connection.execute(
                 "SELECT * FROM job_videos WHERE job_id = ? AND is_active_version = 1"
@@ -1683,7 +1985,7 @@ def create_app(settings: Settings) -> FastAPI:
                 (job_id,),
             ).fetchall()
             if not videos:
-                return page(request, "notfound.html", "dashboard", what="video")
+                return page(request, "notfound.html", "dashboard", what="video", status_code=404)
 
             chosen = next((v for v in videos if v["id"] == video), videos[0])
 
@@ -1704,6 +2006,27 @@ def create_app(settings: Settings) -> FastAPI:
                 for plan in plans
             }
 
+            # How long, alongside how much. Cost was already shown; time was not,
+            # and on a local model time is the whole price — a fifteen-hundred
+            # picture video costs nothing and takes most of a day. Someone should
+            # learn that before pressing the button, not four hours into it.
+            from app.services.estimate import estimate_stage
+
+            durations: dict[Any, str] = {}
+            for plan in plans:
+                predicted = estimate_stage(
+                    connection,
+                    "visual",
+                    plan.frame_count,
+                    model_id=active.visual_analysis.model_id,
+                )
+                # Blank when this machine has not run enough of them to know.
+                # An invented figure is worse than none: someone plans an
+                # afternoon around it.
+                durations[plan.scope] = (
+                    status_module.format_span(predicted.seconds) if predicted.known else ""
+                )
+
             return page(
                 request,
                 "rerun.html",
@@ -1713,6 +2036,7 @@ def create_app(settings: Settings) -> FastAPI:
                 chosen=chosen,
                 plans=plans,
                 estimates=estimates,
+                durations=durations,
                 versions=version_summaries(connection, chosen["id"], root),
                 provider=active.visual_analysis.provider,
                 descriptions_on=active.visual_analysis.enabled
@@ -1924,26 +2248,68 @@ def create_app(settings: Settings) -> FastAPI:
     # ── Job management (F11, F12, F24) ────────────────────────────────────
 
     @app.post("/jobs/{job_id}/rename")
-    def rename_job(job_id: str, name: str = Form("")) -> Response:
+    def rename_job(request: Request, job_id: str, name: str = Form("")) -> Response:
+        """Rename a job, or say why not.
+
+        An empty name used to be dropped on the floor: the dialog closed, the
+        page reloaded, the name was unchanged and nothing explained it. A refusal
+        the user cannot see is the same defect as a control wired to nothing.
+        """
+        from app.services.jobs import MAX_NAME_LENGTH
+
         connection = connect()
-        if connection is not None:
-            try:
-                if name.strip():
-                    connection.execute(
-                        "UPDATE jobs SET name = ?, updated_at = ? WHERE id = ?",
-                        (name.strip(), utc_now(), job_id),
-                    )
-            finally:
-                connection.close()
+        if connection is None:
+            return RedirectResponse("/", status_code=303)
+        try:
+            job = connection.execute("SELECT id FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            if job is None:
+                return page(request, "notfound.html", "dashboard", what="job", status_code=404)
+
+            wanted = name.strip()
+            if not wanted:
+                return render_job(
+                    request,
+                    job_id,
+                    problems=["The job needs a name. Nothing was changed."],
+                    status_code=400,
+                )
+            if len(wanted) > MAX_NAME_LENGTH:
+                return render_job(
+                    request,
+                    job_id,
+                    problems=[
+                        f"That name is {len(wanted)} characters. Keep it to "
+                        f"{MAX_NAME_LENGTH} or fewer so it stays readable in the list "
+                        "and in the browser tab."
+                    ],
+                    status_code=400,
+                )
+
+            connection.execute(
+                "UPDATE jobs SET name = ?, updated_at = ? WHERE id = ?",
+                (wanted, utc_now(), job_id),
+            )
+        finally:
+            connection.close()
         return RedirectResponse(f"/jobs/{job_id}", status_code=303)
 
     @app.post("/jobs/{job_id}/delete")
-    def delete_job(job_id: str, remove_files: str = Form("")) -> Response:
+    def delete_job(request: Request, job_id: str, remove_files: str = Form("")) -> Response:
         """Delete a job. Files are removed only when explicitly asked for.
 
         The default keeps the output: the database row is cheap to recreate and
         the artifacts are the expensive part. Removing them has to be a separate,
         deliberate choice.
+
+        **The row goes first, and the files only once it has committed.** This
+        used to be the other way round, which meant an expensive folder was
+        erased before a delete that could still fail — and it did fail, every
+        time a collection cited the job, because ``collection_sources`` holds an
+        unqualified reference to ``job_videos`` on purpose. The rollback then put
+        the row back, so the dashboard listed a job whose every file was gone,
+        above an error page promising nothing had been affected. Ordering the
+        reversible step first means the worst case is an orphaned folder, and
+        "Bring in earlier work" already finds those.
         """
         import shutil as shutil_module
 
@@ -1952,6 +2318,33 @@ def create_app(settings: Settings) -> FastAPI:
             return RedirectResponse("/", status_code=303)
 
         try:
+            job = connection.execute("SELECT id FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            if job is None:
+                return page(request, "notfound.html", "dashboard", what="job", status_code=404)
+
+            busy = in_flight_reason(connection, job_id)
+            if busy:
+                return render_job(request, job_id, problems=[busy], status_code=409)
+
+            cited_by = collections_using(connection, job_id)
+            if cited_by:
+                listed = ", ".join(cited_by)
+                return render_job(
+                    request,
+                    job_id,
+                    problems=[
+                        f"This job's video is used by {listed}. A collection keeps the "
+                        "exact version it was built from, so deleting the job would "
+                        "leave it citing something that no longer exists. Delete "
+                        f"{'those collections' if len(cited_by) > 1 else 'that collection'} "
+                        "first, or keep this job."
+                    ],
+                    status_code=409,
+                )
+
+            connection.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
+            connection.commit()
+
             root = current().output_root
             if remove_files and root is not None:
                 job_dir = Path(root) / job_id
@@ -1964,18 +2357,24 @@ def create_app(settings: Settings) -> FastAPI:
                     if resolved.is_dir():
                         shutil_module.rmtree(resolved, ignore_errors=True)
                         logger.info("Removed the output folder for job %s", job_id[:8])
-
-            connection.execute("DELETE FROM jobs WHERE id = ?", (job_id,))
         finally:
             connection.close()
         return RedirectResponse("/", status_code=303)
 
     @app.post("/jobs/{job_id}/describe")
-    def describe_now(job_id: str, video_id: str = Form("")) -> Response:
+    def describe_now(request: Request, job_id: str, video_id: str = Form("")) -> Response:
         """Add descriptions to a video that was processed without them.
 
         The interface has always told the user this was possible. Until now
         nothing did it — a promise the product made and could not keep.
+
+        Two things are checked before anything is written. The job must exist,
+        because the event this route records is keyed to it and the database
+        rejects an event for a job that is gone — which surfaced as a 500 rather
+        than as "no such job". And the job must not be in flight, because the
+        route's whole mechanism is to set the status back to ``ready``: doing
+        that to a job the worker is part-way through queues it a second time, and
+        on a paid provider the same frames get described — and billed — twice.
         """
         active = current()
         connection = connect()
@@ -1983,6 +2382,18 @@ def create_app(settings: Settings) -> FastAPI:
             return RedirectResponse("/", status_code=303)
 
         try:
+            job = connection.execute(
+                "SELECT id, status FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+            if job is None:
+                return page(request, "notfound.html", "dashboard", what="job", status_code=404)
+
+            busy = in_flight_reason(connection, job_id)
+            if busy:
+                return render_job(request, job_id, problems=[busy], status_code=409)
+
+            was_stopped = job["status"] in ("cancelled", "paused")
+
             if not active.visual_analysis.enabled or active.visual_analysis.provider == "none":
                 connection.execute(
                     "INSERT INTO events (job_id, level, kind, message, created_at)"
@@ -2029,7 +2440,13 @@ def create_app(settings: Settings) -> FastAPI:
                     "info",
                     "describe_requested",
                     "Descriptions requested. The pictures and transcript are kept — "
-                    "only the descriptions are produced.",
+                    "only the descriptions are produced."
+                    + (
+                        " This job had been stopped; asking for descriptions has put it "
+                        "back in the queue."
+                        if was_stopped
+                        else ""
+                    ),
                     utc_now(),
                 ),
             )
@@ -2113,6 +2530,32 @@ def _clear_dead_claim(connection: sqlite3.Connection, output_root: Path) -> None
         return
 
 
+def _stage_eta(started_at: str | None, done: int, total: int) -> str:
+    """How much longer, from how long it has taken so far.
+
+    Measured, never assumed. Rate comes from this run on this machine, so it
+    reflects the actual model, the actual file and whatever else the computer is
+    doing — none of which a hardcoded constant could know. Withheld until 2% is
+    done, because an estimate drawn from three seconds of a nine-hour stage is
+    noise presented as information.
+    """
+    if not started_at or not total or done <= 0:
+        return ""
+
+    elapsed = status_module.elapsed_seconds(started_at)
+    if elapsed is None or elapsed < 5:
+        return ""
+
+    fraction = done / total
+    if fraction < 0.02 or fraction >= 1:
+        return ""
+
+    remaining = elapsed / fraction - elapsed
+    if remaining < 30:
+        return "nearly done"
+    return f"about {status_module.format_span(remaining)} left"
+
+
 def _stage_progress(
     connection: sqlite3.Connection, job_video_id: str, *, visual_requested: bool = True
 ) -> list[dict[str, Any]]:
@@ -2123,8 +2566,20 @@ def _stage_progress(
         "visual": "Descriptions",
         "assemble": "Put together",
     }
+
+    # Each stage counts in the unit its user thinks in. Transcription measures
+    # seconds of the video covered, so its figures are clock positions rather
+    # than a tally; everything else counts things.
+    def as_pictures(done: int, total: int) -> str:
+        return f"{done:,} of {total:,}"
+
+    def as_clock(done: int, total: int) -> str:
+        return f"{status_module.format_duration(done)} of {status_module.format_duration(total)}"
+
+    formats = {"transcribe": as_clock}
+
     rows = connection.execute(
-        "SELECT stage, status, items_total, items_done FROM stage_runs"
+        "SELECT stage, status, items_total, items_done, started_at FROM stage_runs"
         " WHERE job_video_id = ? ORDER BY id",
         (job_video_id,),
     ).fetchall()
@@ -2140,18 +2595,32 @@ def _stage_progress(
             # "Waiting" on a finished job reads as a stalled stage. A stage that
             # was never requested is a different thing and should say so.
             detail = "Not run" if stage == "visual" and not visual_requested else "Waiting"
-            progress.append({"label": label, "percent": 0, "detail": detail, "state": "ready"})
+            progress.append(
+                {"label": label, "percent": 0, "detail": detail, "state": "ready", "eta": ""}
+            )
             continue
 
         total = row["items_total"] or 0
         done = row["items_done"] or 0
+        eta = ""
+        indeterminate = False
+
         if row["status"] in {"completed", "completed_with_gaps"}:
             percent, detail = 100, "Done"
         elif total:
             percent = min(100, int(done * 100 / total))
-            detail = f"{done:,} of {total:,}"
+            detail = formats.get(stage, as_pictures)(done, total)
+            if row["status"] == "running":
+                eta = _stage_eta(row["started_at"], done, total)
+        elif row["status"] == "running":
+            # Running, but nothing to divide by yet — the stage has not declared
+            # its size. This used to print the raw database word "running" at 0%
+            # next to properly written cells, which read as both broken and
+            # finished-at-nothing. Say it is working and let the bar say it
+            # cannot yet say how far.
+            percent, detail, indeterminate = 0, "Working", True
         else:
-            percent, detail = 0, row["status"].replace("_", " ")
+            percent, detail = 0, row["status"].replace("_", " ").capitalize()
 
         progress.append(
             {
@@ -2159,6 +2628,8 @@ def _stage_progress(
                 "percent": percent,
                 "detail": detail,
                 "state": row["status"],
+                "eta": eta,
+                "indeterminate": indeterminate,
             }
         )
     return progress

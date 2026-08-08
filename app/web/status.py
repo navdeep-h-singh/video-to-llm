@@ -75,14 +75,11 @@ def is_running(status: str | None) -> bool:
 
 
 def format_duration(seconds: float | None) -> str:
-    if not seconds or seconds <= 0:
-        return "—"
-    total = int(seconds)
-    hours, remainder = divmod(total, 3600)
-    minutes, secs = divmod(remainder, 60)
-    if hours:
-        return f"{hours}:{minutes:02d}:{secs:02d}"
-    return f"{minutes}:{secs:02d}"
+    # One implementation, in the pipeline, so a stage's own progress events and
+    # the screen reporting that stage cannot format the same number differently.
+    from app.pipeline.progress import format_clock
+
+    return format_clock(seconds)
 
 
 def format_relative(timestamp: str | None) -> str:
@@ -162,6 +159,51 @@ def format_elapsed(started_at: str | None, completed_at: str | None = None) -> s
     if seconds < 3600:
         return f"{seconds // 60}m {seconds % 60}s"
     return f"{seconds // 3600}h {(seconds % 3600) // 60}m"
+
+
+def elapsed_seconds(started_at: str | None) -> float | None:
+    """Seconds since *started_at*, or None if it cannot be read.
+
+    None rather than 0 for an unparseable timestamp: a caller dividing by this
+    must be able to tell "no time has passed" from "I do not know", and an
+    estimate built on a silent zero would be confidently wrong.
+    """
+    if not started_at:
+        return None
+
+    from datetime import UTC, datetime
+
+    try:
+        moment = datetime.fromisoformat(started_at)
+    except (TypeError, ValueError):
+        return None
+    start = moment.replace(tzinfo=UTC) if moment.tzinfo is None else moment
+    return max(0.0, (datetime.now(UTC) - start).total_seconds())
+
+
+def format_span(seconds: float | None) -> str:
+    """A rough duration in words: "5 minutes", "about 2 hours".
+
+    Deliberately coarser than :func:`format_elapsed`. This renders a *prediction*
+    and the precision should admit that — "about 3 hours 47 minutes left" claims
+    an accuracy no estimate from a running average has.
+    """
+    if not seconds or seconds <= 0:
+        return "a moment"
+    total = int(seconds)
+    if total < 90:
+        return "under a minute"
+    minutes = total // 60
+    if minutes < 60:
+        return f"{minutes} minutes"
+    hours = minutes / 60
+    if hours < 2:
+        return "about an hour"
+    if hours < 10:
+        rounded = round(hours * 2) / 2
+        whole = int(rounded)
+        return f"about {whole} hours" if rounded == whole else f"about {whole}½ hours"
+    return f"about {round(hours)} hours"
 
 
 def format_moment(timestamp: str | None) -> str:

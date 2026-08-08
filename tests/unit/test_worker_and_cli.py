@@ -14,6 +14,7 @@ from app.core.logging import configure_logging
 from app.services.doctor import CheckState, check_localhost_binding, run_doctor
 from app.services.smoke import run_smoke_test
 from app.worker.runner import Worker, run_worker
+from tests.loopback import LOOPBACK_BASE_URL
 
 
 @pytest.fixture(autouse=True)
@@ -301,7 +302,7 @@ def test_health_endpoint_reports_the_bound_address(settings):
 
     from app.web.app import create_app
 
-    with TestClient(create_app(settings)) as client:
+    with TestClient(create_app(settings), base_url=LOOPBACK_BASE_URL) as client:
         payload = client.get("/health").json()
     assert payload["status"] == "ok"
     assert payload["bound_to"] == "127.0.0.1"
@@ -312,7 +313,7 @@ def test_the_api_documentation_endpoints_are_disabled(settings):
 
     from app.web.app import create_app
 
-    with TestClient(create_app(settings)) as client:
+    with TestClient(create_app(settings), base_url=LOOPBACK_BASE_URL) as client:
         for path in ("/docs", "/redoc", "/openapi.json"):
             assert client.get(path).status_code == 404
 

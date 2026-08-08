@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 from app.core.config import Settings
 from app.core.db import open_database, utc_now
 from app.web.app import create_app
+from tests.loopback import LOOPBACK_BASE_URL
 
 CSS = Path(__file__).resolve().parents[2] / "app" / "web" / "static" / "tokens.css"
 
@@ -190,7 +191,7 @@ def client(tmp_path):
         ("j1", "A job", "analyzing", "/out", utc_now(), utc_now()),
     )
     connection.close()
-    with TestClient(create_app(settings)) as test_client:
+    with TestClient(create_app(settings), base_url=LOOPBACK_BASE_URL) as test_client:
         yield test_client
 
 

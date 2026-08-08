@@ -17,6 +17,7 @@ plausible but wrong times is worse than none.
 from __future__ import annotations
 
 import platform
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -256,12 +257,19 @@ def build_transcript(
     segments: list[SpeechSegment],
     silences: list[SilenceWindow],
     transcriber: SegmentTranscriber,
+    on_progress: Callable[[float], None] | None = None,
 ) -> list[TranscriptSegment]:
     """Transcribe each speech segment and weave the silences back in.
 
     The remapping is the point: a model given a window reports times relative to
     it, and the segment's own offset is what puts them back on the video's
     timeline.
+
+    ``on_progress`` is called with the point on the *video's* timeline that has
+    been covered, in seconds. Reported after each window including one that
+    failed, because the run has genuinely moved past it — a stretch of
+    unreadable audio should not freeze the figure and make a working stage look
+    stuck.
     """
     collected: list[TranscriptSegment] = []
 
@@ -272,13 +280,15 @@ def build_transcript(
             )
         except Exception as error:
             # One unreadable stretch must not lose the rest of the transcript.
+            # Falling through with nothing collected rather than `continue`, so
+            # the single progress call below covers the failed window too.
             logger.warning(
                 "Could not transcribe %.1fs to %.1fs: %s",
                 segment.start_seconds,
                 segment.end_seconds,
                 redacted_exception_text(error),
             )
-            continue
+            pieces = []
 
         for relative_start, relative_end, text in pieces:
             collected.append(
@@ -288,6 +298,11 @@ def build_transcript(
                     text=text,
                 )
             )
+
+        # After the work, never before: reporting on entry would show the bar
+        # running ahead of what has actually been transcribed.
+        if on_progress is not None:
+            on_progress(segment.end_seconds)
 
     for window in silences:
         collected.append(

@@ -29,6 +29,7 @@ from app.pipeline.audio import (
 )
 from app.pipeline.frames import MANIFEST_FILENAME, extract_frames
 from app.pipeline.probe import probe
+from app.pipeline.progress import StageProgress, format_clock
 from app.pipeline.transcribe import (
     TRANSCRIPT_FILENAME,
     FasterWhisperTranscriber,
@@ -265,6 +266,21 @@ def run_transcription_stage(
         silences = detect_silence(audio_path, threshold_seconds=threshold)
         segments = speech_segments(silences, info.duration_seconds)
 
+        # Seconds of video covered, not speech segments walked. Segments run
+        # from a second to several minutes, so a count of them jumps unevenly
+        # and any estimate built on it is wrong; audio-time advances steadily.
+        progress = StageProgress(
+            context.connection,
+            stage_run_id,
+            on_event=lambda done, total: _record_event(
+                context,
+                f"Still writing the transcript for {context.source_path.name} — "
+                f"{format_clock(done)} of {format_clock(total)} covered.",
+                kind="stage_progress",
+            ),
+        )
+        progress.set_total(int(info.duration_seconds or 0))
+
         backend = resolve_backend(context.settings.transcription.backend)
         active = transcriber or FasterWhisperTranscriber(
             model=context.settings.transcription.model,
@@ -272,7 +288,10 @@ def run_transcription_stage(
             language=context.settings.transcription.language,
         )
 
-        transcript_segments = build_transcript(audio_path, segments, silences, active)
+        transcript_segments = build_transcript(
+            audio_path, segments, silences, active, on_progress=progress.advance_to
+        )
+        progress.finish()
 
         result = TranscriptionResult(
             segments=transcript_segments,
@@ -431,6 +450,18 @@ def run_visual_stage(context: StageContext, *, provider: Any = None) -> Any:
 
         budget = BudgetTracker(limit_usd=visual.budget.hard_limit_usd, provider=visual.provider)
 
+        visual_progress = StageProgress(
+            context.connection,
+            stage_run_id,
+            on_event=lambda done, total: _record_event(
+                context,
+                f"Still describing pictures from {context.source_path.name} — "
+                f"{done:,} of {total:,} done.",
+                kind="stage_progress",
+            ),
+        )
+        visual_progress.set_total(sum(len(r.frames) for r in requests))
+
         result = run_visual_analysis(
             context.connection,
             stage_run_id=stage_run_id,
@@ -441,7 +472,9 @@ def run_visual_stage(context: StageContext, *, provider: Any = None) -> Any:
             provider=active,
             requests=requests,
             budget=budget,
+            on_progress=visual_progress.advance_to,
         )
+        visual_progress.finish()
 
         if carried:
             # Merged before writing, and ordered by frame number, so the results

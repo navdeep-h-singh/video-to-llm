@@ -145,21 +145,28 @@
 
 <nav class="viewer-nav" aria-label="Move between pictures">
   <a class="btn btn-secondary" id="prev-frame"
-     href="/jobs/{{ job_id }}/review?video={{ chosen['id'] }}&frame={{ position - 1 }}"
+     href="/jobs/{{ job_id }}/review?video={{ chosen['id'] }}&picture={{ position }}"
      {% if position == 0 %}aria-disabled="true" tabindex="-1" style="opacity:.4;pointer-events:none"{% endif %}>
     ← Previous
   </a>
 
+  {#
+    The number in this box is the number under the picture. It used to be the
+    internal index, so the caption read "picture 6 of 20" while the box read 5,
+    and typing the number you had just read took you to the wrong picture. On a
+    screen whose whole purpose is citing a moment by its number, that is the one
+    thing it must get right.
+  #}
   <form method="get" action="/jobs/{{ job_id }}/review" class="jump">
     <input type="hidden" name="video" value="{{ chosen['id'] }}">
     <label for="frame-jump" class="visually-hidden">Jump to picture number</label>
-    <input class="input mono" id="frame-jump" name="frame" type="number"
-           value="{{ position }}" min="0" max="{{ frame_count - 1 }}" style="width:110px">
+    <input class="input mono" id="frame-jump" name="picture" type="number"
+           value="{{ position + 1 }}" min="1" max="{{ frame_count }}" style="width:110px">
     <button class="btn btn-secondary" type="submit">Go</button>
   </form>
 
   <a class="btn btn-secondary" id="next-frame"
-     href="/jobs/{{ job_id }}/review?video={{ chosen['id'] }}&frame={{ position + 1 }}"
+     href="/jobs/{{ job_id }}/review?video={{ chosen['id'] }}&picture={{ position + 2 }}"
      {% if position >= frame_count - 1 %}aria-disabled="true" tabindex="-1" style="opacity:.4;pointer-events:none"{% endif %}>
     Next →
   </a>

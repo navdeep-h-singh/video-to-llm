@@ -291,6 +291,22 @@ textarea.input { min-height: 90px; resize: vertical; }
 .bar > span { display: block; height: 100%; background: var(--color-text); }
 .bar-accent > span { background: var(--color-accent); }
 
+/* A stage that is working but cannot yet say how far along it is. A bar frozen
+   at 0% is indistinguishable from a hung one, which is the whole complaint this
+   answers; motion says "running" without claiming a position it does not know.
+   The detail text beside it reads "Working", so this is never the only signal —
+   the same rule as status: never colour, or here motion, alone. */
+.bar-working { position: relative; }
+.bar-working > span {
+  position: absolute; inset: 0; width: 35%;
+  background: var(--color-accent);
+  animation: bar-sweep 1.4s ease-in-out infinite;
+}
+@keyframes bar-sweep {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}
+
 .grid { display: grid; gap: var(--space-3); }
 .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -373,6 +389,19 @@ textarea.input { min-height: 90px; resize: vertical; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
+
+  /* The rule above would freeze the working bar mid-sweep, leaving a stalled
+     35%-wide block that reads as a position — "a third done" — which is exactly
+     the false precision the indeterminate bar exists to avoid. Without motion it
+     becomes an evenly hatched full-width fill: clearly not a measurement. */
+  .bar-working > span {
+    position: static; width: 100%; transform: none;
+    background: repeating-linear-gradient(
+      135deg,
+      var(--color-accent) 0 6px,
+      var(--color-neutral-300) 6px 12px
+    );
+  }
 }
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 

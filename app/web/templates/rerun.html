@@ -4,6 +4,7 @@
 {% set problems = problems | default([], true) %}
 {% set plans = plans | default([], true) %}
 {% set estimates = estimates | default({}, true) %}
+{% set durations = durations | default({}, true) %}
 {% set versions = versions | default([], true) %}
 {% set descriptions_on = descriptions_on | default(false, true) %}
 {% set provider = provider | default("none", true) %}
@@ -73,7 +74,8 @@
     <caption class="visually-hidden">Choices for what to describe again</caption>
     <thead><tr><th scope="col"><span class="visually-hidden">Choose</span></th>
                <th scope="col">What</th><th scope="col">Pictures</th>
-               <th scope="col">Kept from before</th><th scope="col">Roughly costs</th></tr></thead>
+               <th scope="col">Kept from before</th><th scope="col">Roughly costs</th>
+               <th scope="col">Roughly takes</th></tr></thead>
     <tbody>
       {% for plan in plans %}
       <tr>
@@ -94,6 +96,16 @@
         <td class="mono">
           {% set estimate = estimates.get(plan.scope) %}
           {% if estimate %}{{ estimate.label }}{% else %}&mdash;{% endif %}
+        </td>
+        {#
+          On a local model the cost column reads "free", which is true and
+          badly incomplete: the price is hours. This column is measured from
+          runs this computer has actually finished, and stays empty until there
+          are enough of them to mean anything.
+        #}
+        <td class="mono">
+          {% if durations.get(plan.scope) %}{{ durations[plan.scope] }}
+          {% else %}<span class="text-muted">not measured yet</span>{% endif %}
         </td>
       </tr>
       {% endfor %}

@@ -1,0 +1,190 @@
+"""A long stage must be visibly working while it works.
+
+The defect these pin: ``items_total`` and ``items_done`` were both written when
+a stage *finished*, so a stage in flight had no denominator, the bar sat at
+exactly 0% for its whole run, and the only text on screen was the raw database
+word "running". On a fifty-minute transcript that is an hour indistinguishable
+from a hang; on a local description run it is most of a day of it.
+
+A failure here is a regression.
+"""
+
+from __future__ import annotations
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.core.config import Settings
+from app.core.db import open_database, utc_now
+from app.pipeline.progress import StageProgress, format_clock
+from app.web.app import create_app
+from tests.loopback import LOOPBACK_BASE_URL
+
+
+@pytest.fixture
+def settings(tmp_path) -> Settings:
+    return Settings().with_output_root(tmp_path / "out")
+
+
+@pytest.fixture
+def db(settings):
+    connection = open_database(settings.output_root)
+    yield connection
+    connection.close()
+
+
+@pytest.fixture
+def client(settings, db):
+    with TestClient(create_app(settings), base_url=LOOPBACK_BASE_URL) as test_client:
+        yield test_client
+
+
+def seed(connection, *, stage="transcribe", status="running", total=None, done=0):
+    connection.execute(
+        "INSERT INTO jobs (id, name, status, output_root, frame_interval_ms,"
+        " visual_provider, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+        ("j1", "Course", "transcribing", "/out", 2000, "none", utc_now(), utc_now()),
+    )
+    connection.execute(
+        "INSERT INTO job_videos (id, job_id, source_path, display_name, sequence,"
+        " status, output_dir, is_active_version, created_at, updated_at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?)",
+        ("j1v1", "j1", "/src/a.mp4", "a.mp4", 0, "transcribing", "j1/v1", 1, utc_now(), utc_now()),
+    )
+    connection.execute(
+        "INSERT INTO stage_runs (id, job_video_id, stage, status, items_total,"
+        " items_done, started_at, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        ("s1", "j1v1", stage, status, total, done, utc_now(), utc_now(), utc_now()),
+    )
+    connection.commit()
+
+
+# ── The writer ────────────────────────────────────────────────────────────
+
+
+def test_the_total_is_published_before_any_work_is_done(db):
+    """Until a denominator exists the interface has nothing to draw. Declaring
+    it at the start is what stops a long stage looking like a stalled one."""
+    seed(db)
+    progress = StageProgress(db, "s1")
+    progress.set_total(2978)
+
+    row = db.execute("SELECT items_total, items_done FROM stage_runs WHERE id='s1'").fetchone()
+    assert row["items_total"] == 2978
+    assert row["items_done"] == 0
+
+
+def test_progress_is_throttled_but_never_lost(db):
+    """Writing on every segment would hammer SQLite while the worker heartbeat
+    writes on another connection. The last value must still land."""
+    seed(db)
+    ticks = iter([0.0, 0.1, 0.2, 0.3, 100.0])
+    progress = StageProgress(db, "s1", clock=lambda: next(ticks))
+    progress.set_total(1000)
+
+    progress.advance_to(10)  # throttled away
+    progress.advance_to(20)  # throttled away
+    progress.advance_to(30)  # clock has jumped; this one writes
+
+    row = db.execute("SELECT items_done FROM stage_runs WHERE id='s1'").fetchone()
+    assert row["items_done"] == 30
+
+
+def test_finish_flushes_a_value_the_throttle_would_have_dropped(db):
+    seed(db)
+    progress = StageProgress(db, "s1", clock=lambda: 0.0)
+    progress.set_total(100)
+    progress.advance_to(99)
+    progress.finish()
+
+    row = db.execute("SELECT items_done FROM stage_runs WHERE id='s1'").fetchone()
+    assert row["items_done"] == 99
+
+
+def test_a_database_error_never_escapes_into_the_stage(db):
+    """A dropped progress tick costs a moment of staleness. Raising out of a
+    nine-hour transcription costs the transcription."""
+    seed(db)
+    progress = StageProgress(db, "s1")
+    db.close()  # every later write will fail
+
+    progress.set_total(10)
+    progress.advance_to(5)
+    progress.finish()  # must not raise
+
+
+def test_progress_never_exceeds_the_total(db):
+    """A rounding slip that reported 101% would render a bar past its own end."""
+    seed(db)
+    progress = StageProgress(db, "s1", clock=lambda: 0.0)
+    progress.set_total(100)
+    progress.advance_to(500)
+    progress.finish()
+
+    row = db.execute("SELECT items_done FROM stage_runs WHERE id='s1'").fetchone()
+    assert row["items_done"] == 100
+
+
+def test_the_still_working_event_is_rate_limited(db):
+    """The event log already grows without bound. A progress line every few
+    seconds through an eleven-hour stage is what would make that matter."""
+    seen: list[tuple[int, int]] = []
+    seed(db)
+    ticks = iter([0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 10_000.0, 10_001.0])
+    progress = StageProgress(
+        db, "s1", on_event=lambda d, t: seen.append((d, t)), clock=lambda: next(ticks)
+    )
+    progress.set_total(1000)
+    for value in (100, 200, 300):
+        progress.advance_to(value)
+
+    assert len(seen) <= 1, f"emitted {len(seen)} events for three quick ticks"
+
+
+# ── What the screen shows ─────────────────────────────────────────────────
+
+
+def test_a_running_stage_with_no_total_says_working_not_running(client, db):
+    """ "running" is a database enum. Every other cell on this strip is written
+    English — Done, Waiting, Not run — so the raw word read as a bug, and at 0%
+    it also read as finished-at-nothing."""
+    seed(db, total=None, done=0)
+    body = client.get("/jobs/j1").text
+
+    assert "Working" in body
+    assert ">running<" not in body
+
+
+def test_a_running_transcript_reports_clock_positions_not_a_tally(client, db):
+    """Transcription measures seconds of video covered. "900 of 1,800" is a pair
+    of meaningless numbers; "15:00 of 30:00" is a place in the video."""
+    seed(db, stage="transcribe", total=1800, done=900)
+    body = client.get("/jobs/j1").text
+
+    assert "15:00 of 30:00" in body
+    assert "900 of 1,800" not in body
+
+
+def test_a_running_description_stage_counts_pictures(client, db):
+    seed(db, stage="visual", total=1488, done=312)
+    body = client.get("/jobs/j1").text
+
+    assert "312 of 1,488" in body
+
+
+def test_the_bar_actually_moves(client, db):
+    """The whole point. A stage at 900 of 1,800 must render a half-full bar and
+    not the 0% that every in-flight stage used to show."""
+    seed(db, stage="transcribe", total=1800, done=900)
+    body = client.get("/jobs/j1").text
+
+    assert "width: 50%" in body
+
+
+def test_format_clock_and_format_duration_agree(db):
+    """Two spellings of the same number on two screens is how a user starts
+    wondering which one is lying."""
+    from app.web.status import format_duration
+
+    for seconds in (0, 59, 60, 611, 3600, 4530):
+        assert format_clock(seconds) == format_duration(seconds)

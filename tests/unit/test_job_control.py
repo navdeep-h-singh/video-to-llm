@@ -21,6 +21,7 @@ from app.services.jobs import (
 )
 from app.web.app import create_app
 from tests.fixtures.synthetic import ffmpeg_available, make_video
+from tests.loopback import LOOPBACK_BASE_URL
 
 needs_ffmpeg = pytest.mark.skipif(not ffmpeg_available(), reason="FFmpeg is not installed")
 
@@ -39,7 +40,7 @@ def db(settings):
 
 @pytest.fixture
 def client(settings, db):
-    with TestClient(create_app(settings)) as test_client:
+    with TestClient(create_app(settings), base_url=LOOPBACK_BASE_URL) as test_client:
         yield test_client
 
 
@@ -343,6 +344,9 @@ def test_a_good_job_submission_redirects_to_the_job(client, db, tmp_path):
 
 
 def test_a_collection_needs_a_name_and_a_video(client, db):
+    # 400, not 200: the submission was rejected, and the status should say so
+    # as plainly as the page does. The message is the part that matters to the
+    # person, and it is still there.
     response = client.post("/collections", data={"name": ""}, follow_redirects=False)
-    assert response.status_code == 200
+    assert response.status_code == 400
     assert "choose at least one video" in response.text

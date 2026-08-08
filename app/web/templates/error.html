@@ -4,14 +4,24 @@
 <div class="page-head">
   <div>
     <h1>Something went wrong on this screen</h1>
-    <p class="page-sub">Your jobs and files are unaffected — this is only the display.</p>
+    <p class="page-sub">The details were written to the log.</p>
   </div>
 </div>
 
+{#
+  This page used to promise "your jobs and files are unaffected". It cannot know
+  that. It is rendered from a handler that catches anything, including a request
+  that had already begun changing things when it failed — so the one time the
+  reassurance mattered most, it was false. Say what is certainly true (the
+  worker is a separate process with its own state) and tell the user where to
+  look, rather than making a guarantee this page is not in a position to give.
+#}
 <div class="panel" role="alert">
   <p style="font-size:14px">
-    The details were written to the log. Nothing was lost: the background worker
-    keeps its own state, and everything already produced is still on disk.
+    The background worker runs as its own process and keeps its own state, so
+    whatever it was doing is still going. If this happened while you were
+    changing something, check that screen before trying again — the change may
+    have been partly made.
   </p>
 
   <h5 style="margin-top:var(--space-4)">Most likely cause</h5>
