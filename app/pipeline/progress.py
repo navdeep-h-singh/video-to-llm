@@ -117,6 +117,19 @@ class StageProgress:
         self._write()
         self._maybe_announce()
 
+    def flush(self) -> None:
+        """Publish where we are now, ignoring the throttle.
+
+        Call this before doing something slow. The throttle assumes progress
+        arrives steadily, and a resume breaks that assumption badly: five
+        hundred already-finished batches are recognised in well under a second,
+        so every one of those updates is throttled away — and the run then
+        blocks on the first real piece of work for half a minute with the
+        screen still reading zero. The figure was correct and a second stale;
+        it looked like a resume that had done nothing.
+        """
+        self._write(force=True)
+
     def finish(self) -> None:
         """Flush the last value, whatever the throttle would have said."""
         self._write(force=True)

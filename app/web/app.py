@@ -2568,7 +2568,11 @@ def _stage_eta(started_at: str | None, done: int, total: int) -> str:
     remaining = elapsed / fraction - elapsed
     if remaining < 30:
         return "nearly done"
-    return f"about {status_module.format_span(remaining)} left"
+    # No "about" here. format_span already hedges where hedging is warranted —
+    # "about 7½ hours", but a flat "5 minutes" — and prepending another one
+    # produced "about about 7½ hours left" on screen. The qualifier belongs
+    # wherever the imprecision is decided, which is there and not here.
+    return f"{status_module.format_span(remaining)} left"
 
 
 def _stage_progress(

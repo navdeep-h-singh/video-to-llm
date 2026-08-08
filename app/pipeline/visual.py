@@ -207,6 +207,7 @@ def run_visual_analysis(
     retry_policy: RetryPolicy | None = None,
     should_stop: Any = None,
     on_progress: Callable[[int], None] | None = None,
+    on_flush: Callable[[], None] = lambda: None,
 ) -> VisualStageResult:
     """Describe every batch, persisting each one before marking it complete.
 
@@ -280,6 +281,12 @@ def run_visual_analysis(
                 break
 
         batch_id = _open_batch(connection, stage_run_id, batch_index, request)
+
+        # About to block for as long as the model takes — half a minute on a
+        # local one. Publish where we are first, or a resume that just skipped
+        # five hundred batches sits on screen at zero for the whole call.
+        if on_progress is not None:
+            on_flush()
 
         outcome = call_with_retries(request, provider.describe, policy=retry_policy)
 

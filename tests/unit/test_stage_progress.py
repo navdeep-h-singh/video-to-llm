@@ -283,3 +283,36 @@ def test_no_estimate_is_offered_in_the_first_seconds(client, db):
     body = client.get("/jobs/j1").text
     assert " left</p>" not in body
     assert "nearly done" not in body
+
+
+def test_the_estimate_reads_as_one_sentence(client, db):
+    """It rendered "about about 7½ hours left" on a real screen for hours.
+
+    format_span decides where a hedge belongs — "about 7½ hours", but a flat
+    "5 minutes" — and the caller prepended a second "about" on top. The earlier
+    test only checked that the phrase ended in " left", which a doubled word
+    sails straight through. Assert the whole sentence.
+    """
+    import re
+
+    seed(db, stage="visual")
+    _running_since(db, seconds_ago=600, total=1488, done=53)
+
+    body = client.get("/jobs/j1").text
+    rendered = re.search(r">([^<>]*\bleft)</p>", body)
+    assert rendered, "no estimate rendered"
+
+    phrase = rendered.group(1)
+    assert "about about" not in phrase, f"doubled qualifier: {phrase!r}"
+    assert re.fullmatch(r"(about .+|under a minute|\d+ minutes) left", phrase), (
+        f"estimate does not read as a sentence: {phrase!r}"
+    )
+
+
+def test_no_duration_phrase_doubles_its_qualifier():
+    """Every value format_span can produce, through the caller that wraps it."""
+    from app.web.status import format_span
+
+    for seconds in (45, 120, 300, 3600, 7200, 27000, 40000, 400000):
+        phrase = f"{format_span(seconds)} left"
+        assert "about about" not in phrase, f"{seconds}s -> {phrase!r}"

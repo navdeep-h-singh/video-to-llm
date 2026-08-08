@@ -473,6 +473,7 @@ def run_visual_stage(context: StageContext, *, provider: Any = None) -> Any:
             requests=requests,
             budget=budget,
             on_progress=visual_progress.advance_to,
+            on_flush=visual_progress.flush,
         )
         visual_progress.finish()
 

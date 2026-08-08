@@ -216,3 +216,77 @@ def test_an_unrecoverable_batch_becomes_a_gap_not_a_second_charge(db, tmp_path):
     assert result.batches_sent == 0, "the batch was described again"
     assert result.has_gaps, "the missing descriptions vanished without a trace"
     assert result.status == "completed_with_gaps"
+
+
+def test_a_resume_shows_what_it_skipped_before_the_first_slow_call(db, tmp_path):
+    """The skip burst must reach the screen, not be eaten by the throttle.
+
+    Recognising hundreds of finished batches takes well under a second, so every
+    one of those updates falls inside the throttle window. The run then blocks on
+    the first real piece of work for half a minute — and without a flush the
+    screen still reads zero throughout, which looks exactly like a resume that
+    achieved nothing. It happened on the real job: 562 batches skipped, "0 of
+    1,488" on screen.
+    """
+    from app.pipeline.progress import StageProgress
+    from app.pipeline.visual import run_visual_analysis
+    from app.providers.base import AnalysisRequest, AnalysisResult, FrameRequest
+
+    root = tmp_path / "out"
+    first = _stage_run(db, attempt=1)
+    requests = []
+    for index in range(4):
+        relative = _write_batch_file(root, f"v1/batches/{index:06d}_batch.json", [index])
+        if index < 3:  # the first three are already done
+            _completed_batch(db, first, index, artifact_path=str(relative))
+        requests.append(
+            AnalysisRequest(
+                frames=(
+                    FrameRequest(
+                        index=index,
+                        timestamp_seconds=float(index),
+                        image_path=tmp_path / f"{index}.jpg",
+                    ),
+                ),
+                model_id="m",
+                prompt="describe",
+            )
+        )
+
+    second = _stage_run(db, attempt=2)
+    progress = StageProgress(db, second, clock=lambda: 1000.0)  # throttle always closed
+    progress.set_total(4)
+
+    seen_before_the_call = []
+
+    class RecordingProvider:
+        """Reads the published figure at the moment a real run would be waiting."""
+
+        def describe(self, request):
+            row = db.execute("SELECT items_done FROM stage_runs WHERE id = ?", (second,)).fetchone()
+            seen_before_the_call.append(row["items_done"])
+            return AnalysisResult(
+                descriptions=[FrameDescription(index=f.index) for f in request.frames],
+                provider="fake",
+                model_id="m",
+            )
+
+    run_visual_analysis(
+        db,
+        stage_run_id=second,
+        job_id="j1",
+        job_video_id="v1",
+        output_root=root,
+        output_dir=root / "out",
+        provider=RecordingProvider(),
+        requests=requests,
+        on_progress=progress.advance_to,
+        on_flush=progress.flush,
+    )
+
+    assert seen_before_the_call, "the provider was never reached"
+    assert seen_before_the_call[0] == 3, (
+        "the screen still showed "
+        f"{seen_before_the_call[0]} of 4 while the run blocked on the model, "
+        "after skipping three finished batches"
+    )
