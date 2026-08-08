@@ -751,3 +751,133 @@ def test_estimating_writes_no_collection(client, sources):
 
     assert sources.execute("SELECT COUNT(*) FROM collections").fetchone()[0] == 0
     assert sources.execute("SELECT COUNT(*) FROM collection_builds").fetchone()[0] == 0
+
+
+# ── Reruns on screen ──────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def describable(db, settings, monkeypatch):
+    """A processed video with a low-confidence description, descriptions on."""
+    import json as json_module
+
+    seed_job(db)
+    directory = Path(settings.output_root) / "j1" / "v1"
+    (directory / "frames").mkdir(parents=True, exist_ok=True)
+    (directory / "frames_manifest.json").write_text(
+        json_module.dumps(
+            {
+                "frames": [
+                    {
+                        "index": i,
+                        "clean_filename": f"{i:06d}_t000000.jpg",
+                        "api_filename": f"{i:06d}_t000000.jpg",
+                        "timestamp_seconds": float(i),
+                    }
+                    for i in range(4)
+                ]
+            }
+        ),
+        "utf-8",
+    )
+    (directory / "visual_results.json").write_text(
+        json_module.dumps(
+            {
+                "descriptions": [
+                    {"index": i, "confidence": "Low" if i == 2 else "High"} for i in range(4)
+                ]
+            }
+        ),
+        "utf-8",
+    )
+    for i in range(4):
+        (directory / "frames" / f"{i:06d}_t000000.jpg").write_bytes(b"\xff\xd8")
+    db.commit()
+    return db
+
+
+@pytest.fixture
+def describing_client(settings, describable):
+    """A client whose settings have a description model configured.
+
+    The default fixture has descriptions off, which is the honest default but
+    means the rerun screen correctly shows nothing to choose.
+    """
+    from dataclasses import replace
+
+    configured = replace(
+        settings,
+        visual_analysis=VisualAnalysisSettings(
+            enabled=True, provider="ollama_local", model_id="qwen2.5vl:7b"
+        ),
+    )
+    with TestClient(create_app(configured)) as test_client:
+        yield test_client
+
+
+def test_the_rerun_screen_offers_each_scope_with_its_count(describing_client):
+    body = describing_client.get("/jobs/j1/rerun").text
+
+    assert "Only the ones marked low confidence" in body
+    assert 'value="low_confidence"' in body
+    assert 'value="range"' in body
+
+
+def test_the_rerun_screen_says_the_previous_version_is_kept(describing_client):
+    """The single most important sentence on the screen. Someone about to spend
+    money needs to know it does not replace what they already have."""
+    body = describing_client.get("/jobs/j1/rerun").text
+    assert "new version" in body
+    assert "untouched" in body.lower() or "stays exactly where it is" in body
+
+
+def test_a_scope_matching_nothing_is_offered_but_not_choosable(describing_client):
+    """Shown as unavailable rather than hidden: "there is nothing marked low
+    confidence" is worth learning, and a missing option teaches nothing."""
+    body = describing_client.get("/jobs/j1/rerun").text
+    assert "disabled" in body
+    assert "none" in body
+
+
+def test_a_local_rerun_is_not_gated_behind_a_cost_confirmation(describing_client):
+    """A model on this computer has no provider charge, so asking someone to
+    confirm one would be ceremony standing in for care."""
+    body = describing_client.get("/jobs/j1/rerun").text
+    assert "charged to my account" not in body
+
+
+def test_a_rerun_queues_a_new_version_and_keeps_the_old_one(describing_client, describable):
+    describing_client.post("/jobs/j1/rerun", data={"video_id": "j1v1", "scope": "low_confidence"})
+
+    rows = describable.execute(
+        "SELECT version, is_active_version FROM job_videos ORDER BY version"
+    ).fetchall()
+    assert [r["version"] for r in rows] == [1, 2]
+    assert [r["is_active_version"] for r in rows] == [0, 1]
+
+
+def test_a_low_confidence_result_is_offered_a_rerun_where_it_is_noticed(client, describable):
+    """The review screen is where the user sees the problem. Making them find a
+    separate screen to act on it is how a feature stays invisible."""
+    body = client.get("/jobs/j1/review").text
+    assert "marked low confidence" in body
+    assert "/jobs/j1/rerun" in body
+
+
+def test_the_rerun_screen_refuses_without_a_description_model(client, describable, tmp_path):
+    """Nothing here can run until there is something to run it with, and a form
+    that pretended otherwise would queue work that could never start."""
+    body = client.get("/jobs/j1/rerun").text
+    assert "No description model is set up" in body
+
+
+def test_a_rerun_is_not_started_without_a_model(client, describable):
+    response = client.post(
+        "/jobs/j1/rerun",
+        data={"video_id": "j1v1", "scope": "low_confidence"},
+        follow_redirects=False,
+    )
+
+    assert response.status_code == 303
+    assert "/settings" in response.headers["location"]
+    assert describable.execute("SELECT COUNT(*) FROM job_videos").fetchone()[0] == 1

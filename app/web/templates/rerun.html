@@ -1,0 +1,205 @@
+{% extends "base.html" %}
+{% from "_macros.html" import empty %}
+{% block title %}Do it again — Video to LLM{% endblock %}
+{% set problems = problems | default([], true) %}
+{% set plans = plans | default([], true) %}
+{% set estimates = estimates | default({}, true) %}
+{% set versions = versions | default([], true) %}
+{% set descriptions_on = descriptions_on | default(false, true) %}
+{% set provider = provider | default("none", true) %}
+{% set budget_limit = budget_limit | default(0, true) %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Describe it again</h1>
+    <p class="page-sub">
+      This makes a <strong>new version</strong>. Everything the previous version
+      produced stays exactly where it is, and any collection built on it is
+      untouched.
+    </p>
+  </div>
+  <div class="actions">
+    <a class="btn btn-secondary" href="/jobs/{{ job.id }}">Back to the job</a>
+  </div>
+</div>
+
+{% if problems %}
+<div class="panel" style="border-left:3px solid var(--color-accent)" role="alert">
+  <ul style="margin:0;padding-left:var(--space-4);font-size:14px">
+    {% for problem in problems %}<li>{{ problem }}</li>{% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+{% if videos | length > 1 %}
+<div class="panel" style="padding:var(--space-3)">
+  <div class="seg" role="group" aria-label="Which video">
+    {% for v in videos %}
+      <a class="seg-opt" href="/jobs/{{ job.id }}/rerun?video={{ v['id'] }}"
+         style="text-decoration:none{% if chosen and v['id'] == chosen['id'] %};background:var(--color-accent-700);color:var(--color-bg){% endif %}">
+        {{ v['display_name'] }}
+      </a>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{% if not descriptions_on %}
+<div class="panel">
+  <h4 style="margin:0 0 var(--space-2)">No description model is set up</h4>
+  <p style="font-size:14px">
+    Describing pictures is off. Choose a model first &mdash; nothing here can run
+    until there is something to run it with.
+  </p>
+  <a class="btn btn-primary" href="/settings#describing">Set one up</a>
+</div>
+{% elif chosen %}
+
+<form class="panel" method="post" action="/jobs/{{ job.id }}/rerun">
+  <input type="hidden" name="video_id" value="{{ chosen['id'] }}">
+
+  <div class="panel-head">
+    <h4 style="margin:0">What should be done again?</h4>
+    <span class="tag tag-neutral">{{ chosen['display_name'] }}</span>
+  </div>
+
+  {#
+    Every scope reports the count it would actually send, worked out from what
+    the previous version recorded. A scope that matches nothing is offered as
+    unavailable rather than hidden: "there is nothing marked low confidence" is
+    a useful thing to learn, and a missing option teaches nothing.
+  #}
+  <table class="table">
+    <caption class="visually-hidden">Choices for what to describe again</caption>
+    <thead><tr><th scope="col"><span class="visually-hidden">Choose</span></th>
+               <th scope="col">What</th><th scope="col">Pictures</th>
+               <th scope="col">Kept from before</th><th scope="col">Roughly costs</th></tr></thead>
+    <tbody>
+      {% for plan in plans %}
+      <tr>
+        <td>
+          <input type="radio" name="scope" value="{{ plan.scope }}"
+                 id="scope-{{ plan.scope }}"
+                 {% if plan.is_empty %}disabled{% elif loop.first %}checked{% endif %}>
+        </td>
+        <td><label for="scope-{{ plan.scope }}">{{ plan.label }}</label></td>
+        <td class="mono">
+          {% if plan.is_empty %}
+            <span class="text-muted">none</span>
+          {% else %}
+            {{ "{:,}".format(plan.frame_count) }}
+          {% endif %}
+        </td>
+        <td class="mono text-muted">{{ "{:,}".format(plan.carried_over) }}</td>
+        <td class="mono">
+          {% set estimate = estimates.get(plan.scope) %}
+          {% if estimate %}{{ estimate.label }}{% else %}&mdash;{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <div class="grid grid-3" style="margin-top:var(--space-3)">
+    <div class="field">
+      <label for="range-start">If a range: from picture</label>
+      <input class="input mono" id="range-start" name="start" type="number" min="0"
+             placeholder="0">
+    </div>
+    <div class="field">
+      <label for="range-end">to picture</label>
+      <input class="input mono" id="range-end" name="end" type="number" min="0"
+             placeholder="{{ (chosen['frame_count'] or 1) - 1 }}">
+    </div>
+  </div>
+
+  <p class="note note-neutral" style="margin-top:var(--space-3)">
+    The pictures and the transcript are carried over, not taken again &mdash; they
+    would come out identical, and re-transcribing an hour of audio to redo a few
+    descriptions is time you do not get back. Descriptions outside your choice
+    are kept as they are.
+  </p>
+
+  {% if provider not in ("ollama_local", "none") %}
+    <div class="panel" style="border-left:3px solid var(--color-accent);margin-top:var(--space-3)">
+      <h5 style="margin:0 0 var(--space-2)">This one costs money</h5>
+      <p style="font-size:14px;margin:0">
+        Only the numbered still pictures are sent &mdash; never the video, never the
+        audio. The figures above are estimates from local pricing assumptions,
+        not fetched from anyone. Your cap of
+        <strong class="mono">${{ "%.2f"|format(budget_limit) }}</strong> is checked
+        before anything is sent, so the amount that would cross it never leaves.
+      </p>
+      <label class="radio" style="margin-top:var(--space-3)">
+        <input type="checkbox" name="confirmed" value="1" required>
+        <span class="dot" aria-hidden="true"></span>
+        <span>I understand this will be charged to my account</span>
+      </label>
+    </div>
+  {% endif %}
+
+  <div style="margin-top:var(--space-4);display:flex;gap:var(--space-2)">
+    <button class="btn btn-primary" type="submit">Make a new version</button>
+    <a class="btn btn-secondary" href="/jobs/{{ job.id }}">Cancel</a>
+  </div>
+</form>
+
+<div class="panel">
+  <div class="panel-head">
+    <h4 style="margin:0">Every version of this video</h4>
+    <span class="text-muted" style="font-size:12px">Newest first</span>
+  </div>
+
+  {% if versions %}
+  <table class="table">
+    <caption class="visually-hidden">Versions of this video</caption>
+    <thead><tr><th scope="col">Version</th><th scope="col">What was done</th>
+               <th scope="col">Described</th><th scope="col">Low confidence</th>
+               <th scope="col">Model</th><th scope="col">In use</th></tr></thead>
+    <tbody>
+      {% for version in versions %}
+      <tr>
+        <td class="mono">v{{ version.version }}</td>
+        <td>
+          {{ version.scope_label }}
+          <div class="text-muted" style="font-size:12px">
+            {{ status.format_moment(version.created_at) }}
+          </div>
+        </td>
+        <td class="mono">{{ "{:,}".format(version.described) }}</td>
+        <td class="mono">
+          {% if version.low_confidence %}
+            <span class="tag tag-accent">{{ "{:,}".format(version.low_confidence) }}</span>
+          {% else %}
+            <span class="text-muted">none</span>
+          {% endif %}
+        </td>
+        <td class="mono">{{ version.model_id or "—" }}</td>
+        <td>
+          {% if version.is_active %}
+            <span class="status status-done">
+              <span class="status-dot" aria-hidden="true"></span>
+              <span>In use</span>
+            </span>
+          {% else %}
+            <form method="post" action="/jobs/{{ job.id }}/versions/activate">
+              <input type="hidden" name="video_id" value="{{ version.job_video_id }}">
+              <button class="btn btn-ghost" type="submit">Use this one</button>
+            </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="text-muted" style="font-size:12px;margin-top:var(--space-2)">
+    Switching which version is in use deletes nothing and rewrites nothing. A
+    collection goes on citing whichever version it pinned, whether or not that is
+    the one in use here.
+  </p>
+  {% else %}
+    {{ empty("No versions yet.", "There will be one as soon as this video has been processed.") }}
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

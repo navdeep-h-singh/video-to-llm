@@ -41,6 +41,30 @@
 </div>
 {% endif %}
 
+{#
+  Offered where the problem is noticed rather than on a screen the user would
+  have to already know exists. Redoing only these keeps everything else exactly
+  as it is — on a paid provider, re-sending the rest would be charged again to
+  arrive at the same answer.
+#}
+{% if low_confidence_count | default(0, true) %}
+<div class="panel" style="border-left:3px solid var(--color-accent)">
+  <div style="display:flex;align-items:center;gap:var(--space-3);flex-wrap:wrap">
+    <div>
+      <h4 style="margin:0">{{ "{:,}".format(low_confidence_count) }} marked low confidence</h4>
+      <p class="text-muted" style="font-size:13px;margin:var(--space-1) 0 0">
+        A better model can be asked to redo just these. The rest are kept as they
+        are, and the current version stays where it is.
+      </p>
+    </div>
+    <a class="btn btn-secondary" style="margin-left:auto"
+       href="/jobs/{{ job_id }}/rerun?video={{ chosen['id'] if chosen else '' }}">
+      Redo just those
+    </a>
+  </div>
+</div>
+{% endif %}
+
 {% if not frames %}
   <div class="panel">
     {{ empty("There are no pictures to review yet.",

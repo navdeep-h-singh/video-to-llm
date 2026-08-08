@@ -608,6 +608,14 @@ def create_app(settings: Settings) -> FastAPI:
                 active=active,
                 description=descriptions.get(active["index"]) if active else None,
                 description_count=len(descriptions),
+                # Surfaced where the problem is actually noticed. The rerun that
+                # fixes it lives one click away rather than on a screen the user
+                # would have to already know about.
+                low_confidence_count=sum(
+                    1
+                    for entry in descriptions.values()
+                    if str(entry.get("confidence", "")).lower() == "low"
+                ),
                 nearby=nearby,
                 transcript_count=len(transcript),
                 frames_relative=frames_relative,
@@ -1473,6 +1481,171 @@ def create_app(settings: Settings) -> FastAPI:
             )
         finally:
             connection.close()
+
+    # ── Targeted reruns (F12) ─────────────────────────────────────────────
+
+    @app.get("/jobs/{job_id}/rerun", response_class=HTMLResponse)
+    def rerun_screen(request: Request, job_id: str, video: str = "") -> Response:
+        """Choose what to do again, and see what it would involve first.
+
+        The scopes are worked out from what the previous version actually
+        recorded, so a choice that would select nothing says so here rather than
+        producing an empty version that looks like work.
+        """
+        from app.pipeline.rerun import RerunError, RerunScope, plan_rerun, version_summaries
+
+        connection = connect()
+        root = current().output_root
+        if connection is None or root is None:
+            return RedirectResponse("/launch", status_code=303)
+
+        try:
+            job = connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            if job is None:
+                return page(request, "notfound.html", "dashboard")
+
+            videos = connection.execute(
+                "SELECT * FROM job_videos WHERE job_id = ? AND is_active_version = 1"
+                " ORDER BY sequence",
+                (job_id,),
+            ).fetchall()
+            if not videos:
+                return page(request, "notfound.html", "dashboard")
+
+            chosen = next((v for v in videos if v["id"] == video), videos[0])
+
+            active = current()
+            plans = []
+            for scope in RerunScope:
+                try:
+                    plans.append(plan_rerun(connection, chosen["id"], root, scope=scope))
+                except RerunError as error:
+                    # One scope that cannot be worked out must not take the
+                    # screen down with it — the others are still choosable.
+                    logger.warning("Could not plan the %s rerun: %s", scope, error)
+
+            from app.providers.costs import estimate_cost
+
+            estimates = {
+                plan.scope: estimate_cost(active.visual_analysis.provider, plan.frame_count)
+                for plan in plans
+            }
+
+            return page(
+                request,
+                "rerun.html",
+                "dashboard",
+                job=job,
+                videos=videos,
+                chosen=chosen,
+                plans=plans,
+                estimates=estimates,
+                versions=version_summaries(connection, chosen["id"], root),
+                provider=active.visual_analysis.provider,
+                descriptions_on=active.visual_analysis.enabled
+                and active.visual_analysis.provider != "none",
+                model_id=active.visual_analysis.model_id,
+                budget_limit=active.visual_analysis.budget.hard_limit_usd,
+            )
+        finally:
+            connection.close()
+
+    @app.post("/jobs/{job_id}/rerun")
+    def start_rerun_route(
+        request: Request,
+        job_id: str,
+        video_id: str = Form(""),
+        scope: str = Form("all"),
+        start: str = Form(""),
+        end: str = Form(""),
+        confirmed: str = Form(""),
+    ) -> Response:
+        """Queue a new version. The previous one is never touched."""
+        from app.pipeline.rerun import RerunError, plan_rerun, start_rerun
+
+        connection = connect()
+        root = current().output_root
+        if connection is None or root is None:
+            return RedirectResponse("/launch", status_code=303)
+
+        active = current()
+        try:
+            if not active.visual_analysis.enabled or active.visual_analysis.provider == "none":
+                return RedirectResponse("/settings#describing", status_code=303)
+
+            try:
+                plan = plan_rerun(
+                    connection,
+                    video_id,
+                    root,
+                    scope=scope,
+                    start=int(start) if start.strip() else None,
+                    end=int(end) if end.strip() else None,
+                )
+                # A run that costs money is confirmed against a stated figure
+                # before anything is sent. A local run has no provider charge,
+                # so making the user confirm one would be ceremony.
+                from app.providers.costs import NO_CHARGE_PROVIDERS
+
+                if active.visual_analysis.provider not in NO_CHARGE_PROVIDERS and not confirmed:
+                    return RedirectResponse(
+                        f"/jobs/{job_id}/rerun?video={video_id}", status_code=303
+                    )
+
+                start_rerun(
+                    connection, plan, output_root=root, model_id=active.visual_analysis.model_id
+                )
+            except RerunError as error:
+                from app.pipeline.rerun import version_summaries
+
+                videos = connection.execute(
+                    "SELECT * FROM job_videos WHERE job_id = ? AND is_active_version = 1"
+                    " ORDER BY sequence",
+                    (job_id,),
+                ).fetchall()
+                job = connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+                chosen = next(
+                    (v for v in videos if v["id"] == video_id), videos[0] if videos else None
+                )
+                return page(
+                    request,
+                    "rerun.html",
+                    "dashboard",
+                    job=job,
+                    videos=videos,
+                    chosen=chosen,
+                    plans=[],
+                    estimates={},
+                    versions=(version_summaries(connection, chosen["id"], root) if chosen else []),
+                    provider=active.visual_analysis.provider,
+                    descriptions_on=True,
+                    problems=[str(error)],
+                )
+        finally:
+            connection.close()
+
+        return RedirectResponse(f"/jobs/{job_id}", status_code=303)
+
+    @app.post("/jobs/{job_id}/versions/activate")
+    def activate_version_route(job_id: str, video_id: str = Form("")) -> Response:
+        """Switch which version the rest of the product uses.
+
+        Nothing is deleted and nothing is rewritten — a collection that pinned
+        another version goes on pointing at exactly the same bytes.
+        """
+        from app.pipeline.rerun import RerunError, make_active
+
+        connection = connect()
+        if connection is None:
+            return RedirectResponse("/launch", status_code=303)
+        try:
+            try:
+                make_active(connection, video_id)
+            except RerunError:
+                logger.warning("Could not activate version %s", video_id)
+        finally:
+            connection.close()
+        return RedirectResponse(f"/jobs/{job_id}/rerun?video={video_id}", status_code=303)
 
     # ── Worker control ────────────────────────────────────────────────────
 

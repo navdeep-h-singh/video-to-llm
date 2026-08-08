@@ -386,6 +386,26 @@ def run_visual_stage(context: StageContext, *, provider: Any = None) -> Any:
 
     try:
         records = load_frame_records(manifest)
+        total_frames = len(records)
+
+        # A rerun describes only the frames it was asked to. Everything else
+        # keeps the description the previous version produced — those were
+        # already paid for, and re-sending them would charge a second time to
+        # arrive at the same answer.
+        from app.pipeline.rerun import carried_descriptions, load_rerun_plan
+
+        rerun_plan = load_rerun_plan(context.output_dir)
+        carried: list[Any] = []
+        if rerun_plan is not None:
+            records = [r for r in records if int(r["index"]) in rerun_plan.indices]
+            carried = carried_descriptions(rerun_plan, context.output_root)
+            logger.info(
+                "Rerun of %s: describing %d frame(s), keeping %d from version %d",
+                context.source_path.name,
+                len(records),
+                len(carried),
+                rerun_plan.from_version,
+            )
 
         if visual.provider == "ollama_local":
             from app.providers.ollama_local import resolve_batch_size
@@ -423,6 +443,28 @@ def run_visual_stage(context: StageContext, *, provider: Any = None) -> Any:
             budget=budget,
         )
 
+        if carried:
+            # Merged before writing, and ordered by frame number, so the results
+            # file for this version describes the whole video rather than only
+            # the part that was redone.
+            import dataclasses
+
+            from app.providers.base import FrameDescription
+
+            # Filtered to fields that still exist: a description written by an
+            # earlier schema may carry keys this one dropped, and a rerun
+            # failing on the previous version's file would make older output
+            # impossible to build on — which is the opposite of the point.
+            known = {f.name for f in dataclasses.fields(FrameDescription)}
+            existing = {int(d.index) for d in result.descriptions}
+            for entry in carried:
+                if int(entry["index"]) in existing:
+                    continue
+                result.descriptions.append(
+                    FrameDescription(**{k: v for k, v in entry.items() if k in known})
+                )
+            result.descriptions.sort(key=lambda d: int(d.index))
+
         results_path, gaps_path = write_visual_results(
             context.output_dir, result, source_filename=context.source_path.name
         )
@@ -459,7 +501,7 @@ def run_visual_stage(context: StageContext, *, provider: Any = None) -> Any:
         context,
         stage_run_id,
         status=result.status,
-        items_total=len(records),
+        items_total=total_frames,
         items_done=len(result.descriptions),
         provider=visual.provider,
         model_id=visual.model_id,
@@ -468,6 +510,11 @@ def run_visual_stage(context: StageContext, *, provider: Any = None) -> Any:
             "batches_reused": result.batches_skipped,
             "cost": result.cost_label,
             "stopped_on_budget": result.stopped_on_budget,
+            # Separated so the record answers "what did this run actually do"
+            # rather than only "what does this version contain".
+            "described_this_run": len(records),
+            "carried_over": len(carried),
+            "rerun_scope": rerun_plan.scope if rerun_plan is not None else None,
         },
     )
 
