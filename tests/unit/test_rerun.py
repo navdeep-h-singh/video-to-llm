@@ -568,3 +568,34 @@ def test_carrying_forward_survives_a_description_from_an_older_schema(db, root):
         "descriptions"
     ]
     assert len(written) == 4
+
+
+def test_a_rerun_turns_descriptions_on_for_the_job(db, root):
+    """The worker honours the job's own description choice. A job created with
+    descriptions off would otherwise queue the new version and then skip the one
+    stage the rerun exists to run."""
+    add_processed_video(db, root, frame_count=4, confidences={0: "Low"})
+    db.execute("UPDATE jobs SET visual_provider = 'none', visual_model_id = '' WHERE id = 'j1'")
+
+    start_rerun(
+        db,
+        plan_rerun(db, "v1", root, scope=RerunScope.LOW_CONFIDENCE),
+        output_root=root,
+        provider="ollama_local",
+        model_id="a-better-model",
+    )
+
+    job = db.execute("SELECT visual_provider, visual_model_id FROM jobs WHERE id='j1'").fetchone()
+    assert job["visual_provider"] == "ollama_local"
+    assert job["visual_model_id"] == "a-better-model"
+
+
+def test_a_rerun_without_a_named_provider_leaves_the_job_alone(db, root):
+    add_processed_video(db, root, frame_count=4)
+    db.execute("UPDATE jobs SET visual_provider = 'ollama_local' WHERE id = 'j1'")
+
+    start_rerun(db, plan_rerun(db, "v1", root, scope=RerunScope.ALL), output_root=root)
+
+    job = db.execute("SELECT visual_provider, status FROM jobs WHERE id='j1'").fetchone()
+    assert job["visual_provider"] == "ollama_local"
+    assert job["status"] == "ready"

@@ -51,10 +51,24 @@ def db(settings):
 
 
 def _make_job(connection, settings, sources, *, job_id="j1"):
+    # The description choice is recorded on the job, exactly as create_job
+    # records it. The worker honours the job's own choice rather than whatever
+    # the global setting happens to be at the time it runs, so a helper that
+    # left this at its 'none' default would be building a job that declines
+    # descriptions and then asserting it produced some.
     connection.execute(
-        "INSERT INTO jobs (id, name, status, output_root, created_at, updated_at)"
-        " VALUES (?,?,?,?,?,?)",
-        (job_id, "Integration job", "ready", str(settings.output_root), utc_now(), utc_now()),
+        "INSERT INTO jobs (id, name, status, output_root, visual_provider,"
+        " visual_model_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+        (
+            job_id,
+            "Integration job",
+            "ready",
+            str(settings.output_root),
+            settings.visual_analysis.provider,
+            settings.visual_analysis.model_id,
+            utc_now(),
+            utc_now(),
+        ),
     )
     for index, source in enumerate(sources):
         connection.execute(

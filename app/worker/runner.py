@@ -16,6 +16,7 @@ import sqlite3
 import sys
 import threading
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from app.core.config import Settings
@@ -116,14 +117,48 @@ class Worker:
 
         self._settle_job(job["id"], had_failures=failed > 0)
 
+    def settings_for(self, job: sqlite3.Row) -> Settings:
+        """The description choice this job was created with, not today's setting.
+
+        The new-job screen offers a per-job choice — on this computer, send to a
+        service, or skip — and records it. The worker used to ignore it entirely
+        and read the global setting instead, which made that control decorative
+        in the worst direction: a job created with "skip descriptions" would
+        describe everything anyway if descriptions happened to be on, and on a
+        paid provider that is somebody's money spent on work they explicitly
+        declined.
+
+        A job with nothing recorded predates the choice being honoured, so it
+        falls back to the global setting rather than silently losing its
+        descriptions.
+        """
+        try:
+            recorded = (job["visual_provider"] or "").strip()
+        except (IndexError, KeyError):
+            return self.settings
+        if not recorded:
+            return self.settings
+
+        model = (job["visual_model_id"] or "").strip() or self.settings.visual_analysis.model_id
+        return replace(
+            self.settings,
+            visual_analysis=replace(
+                self.settings.visual_analysis,
+                enabled=recorded != "none",
+                provider=recorded,
+                model_id=model,
+            ),
+        )
+
     def process_video(self, job: sqlite3.Row, video: sqlite3.Row) -> bool:
         """Run stages 1 and 2 for one video. False when it could not finish."""
-        interval_ms = job["frame_interval_ms"] or self.settings.sampling.interval_ms()
+        settings = self.settings_for(job)
+        interval_ms = job["frame_interval_ms"] or settings.sampling.interval_ms()
         output_dir = self.output_root / job["id"] / f"{video['id']}_v{video['version']}"
 
         context = StageContext(
             connection=self.connection,
-            settings=self.settings,
+            settings=settings,
             job_id=job["id"],
             job_video_id=video["id"],
             source_path=Path(video["source_path"]),
@@ -136,7 +171,7 @@ class Worker:
             self._set_job_status(job["id"], "preparing")
             run_frames_stage(
                 context,
-                make_api_copies=self.settings.visual_analysis.enabled,
+                make_api_copies=settings.visual_analysis.enabled,
             )
 
             self._set_video_status(video["id"], "transcribing")
@@ -144,7 +179,7 @@ class Worker:
             run_transcription_stage(context)
 
             had_gaps = False
-            if self.settings.visual_analysis.enabled:
+            if settings.visual_analysis.enabled:
                 self._set_video_status(video["id"], "analyzing")
                 self._set_job_status(job["id"], "analyzing")
                 had_gaps = run_visual_stage(context).has_gaps

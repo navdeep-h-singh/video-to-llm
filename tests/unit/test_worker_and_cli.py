@@ -396,3 +396,82 @@ def test_a_closed_stream_does_not_fail_a_finished_job(settings, db, monkeypatch)
     _finish_a_job(settings, db)
 
     assert db.execute("SELECT status FROM jobs WHERE id='j1'").fetchone()["status"] == "completed"
+
+
+# ── A job's own description choice ────────────────────────────────────────
+#
+# The new-job screen offers a per-job choice and records it. The worker used to
+# ignore it and read the global setting, which made the control decorative in
+# the worst direction: "skip descriptions" described everything anyway if the
+# global setting happened to be on. On a paid provider that is money spent on
+# work the user explicitly declined.
+
+
+def _job_row(connection, *, provider, model=""):
+    connection.execute(
+        "INSERT INTO jobs (id, name, status, output_root, visual_provider,"
+        " visual_model_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+        ("j1", "A job", "ready", "/out", provider, model, utc_now(), utc_now()),
+    )
+    connection.commit()
+    return connection.execute("SELECT * FROM jobs WHERE id='j1'").fetchone()
+
+
+def _worker(settings, connection):
+    return Worker(settings, connection, worker_id="test")
+
+
+def test_a_job_that_declined_descriptions_does_not_get_them(settings, db):
+    """The expensive direction of the bug, and the reason this is tested."""
+    from app.core.config import VisualAnalysisSettings
+
+    globally_on = replace(
+        settings,
+        visual_analysis=VisualAnalysisSettings(
+            enabled=True, provider="anthropic", model_id="a-model"
+        ),
+    )
+    job = _job_row(db, provider="none")
+
+    resolved = _worker(globally_on, db).settings_for(job)
+
+    assert resolved.visual_analysis.enabled is False
+    assert resolved.visual_analysis.provider == "none"
+
+
+def test_a_job_that_asked_for_descriptions_gets_them(settings, db):
+    job = _job_row(db, provider="ollama_local", model="qwen2.5vl:7b")
+
+    resolved = _worker(settings, db).settings_for(job)
+
+    assert resolved.visual_analysis.enabled is True
+    assert resolved.visual_analysis.provider == "ollama_local"
+    assert resolved.visual_analysis.model_id == "qwen2.5vl:7b"
+
+
+def test_the_job_keeps_the_provider_it_was_created_with(settings, db):
+    """Changing the global setting later must not retarget work already queued
+    against a different service."""
+    from app.core.config import VisualAnalysisSettings
+
+    changed_since = replace(
+        settings,
+        visual_analysis=VisualAnalysisSettings(
+            enabled=True, provider="openai", model_id="something-else"
+        ),
+    )
+    job = _job_row(db, provider="ollama_local", model="qwen2.5vl:7b")
+
+    assert _worker(changed_since, db).settings_for(job).visual_analysis.provider == "ollama_local"
+
+
+def test_everything_else_about_the_settings_is_untouched(settings, db):
+    """Only the description choice comes from the job. The output root, the
+    budget, and the worker's own tuning are properties of this machine."""
+    job = _job_row(db, provider="ollama_local")
+
+    resolved = _worker(settings, db).settings_for(job)
+
+    assert resolved.output_root == settings.output_root
+    assert resolved.worker == settings.worker
+    assert resolved.visual_analysis.budget == settings.visual_analysis.budget

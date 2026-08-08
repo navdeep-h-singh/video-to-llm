@@ -1756,7 +1756,11 @@ def create_app(settings: Settings) -> FastAPI:
                     )
 
                 start_rerun(
-                    connection, plan, output_root=root, model_id=active.visual_analysis.model_id
+                    connection,
+                    plan,
+                    output_root=root,
+                    provider=active.visual_analysis.provider,
+                    model_id=active.visual_analysis.model_id,
                 )
             except RerunError as error:
                 from app.pipeline.rerun import version_summaries
@@ -1995,9 +1999,18 @@ def create_app(settings: Settings) -> FastAPI:
                     "UPDATE job_videos SET status = 'pending', updated_at = ? WHERE id = ?",
                     (utc_now(), video_id),
                 )
+            # The provider moves with the request. The worker honours the job's
+            # own recorded choice, so a job created without descriptions would
+            # otherwise be queued and then skip the only stage being asked for.
             connection.execute(
-                "UPDATE jobs SET status = 'ready', updated_at = ? WHERE id = ?",
-                (utc_now(), job_id),
+                "UPDATE jobs SET status = 'ready', visual_provider = ?, visual_model_id = ?,"
+                " updated_at = ? WHERE id = ?",
+                (
+                    active.visual_analysis.provider,
+                    active.visual_analysis.model_id,
+                    utc_now(),
+                    job_id,
+                ),
             )
             connection.execute(
                 "INSERT INTO events (job_id, level, kind, message, created_at) VALUES (?,?,?,?,?)",

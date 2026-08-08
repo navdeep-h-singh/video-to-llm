@@ -278,6 +278,7 @@ def start_rerun(
     plan: RerunPlan,
     *,
     output_root: Path,
+    provider: str = "",
     model_id: str = "",
 ) -> str:
     """Create the next version and queue it. Returns the new job_video id.
@@ -370,10 +371,21 @@ def start_rerun(
     _mark_stage_carried(connection, new_video_id, "frames", plan.previous_version)
     _mark_stage_carried(connection, new_video_id, "transcribe", plan.previous_version)
 
-    connection.execute(
-        "UPDATE jobs SET status = 'ready', updated_at = ? WHERE id = ?",
-        (utc_now(), previous["job_id"]),
-    )
+    # The job's own description choice has to move with the rerun. The worker
+    # honours what the job recorded rather than the global setting, so a job
+    # created with descriptions off would queue this new version and then
+    # silently skip the one stage the rerun exists to run.
+    if provider:
+        connection.execute(
+            "UPDATE jobs SET status = 'ready', visual_provider = ?, visual_model_id = ?,"
+            " updated_at = ? WHERE id = ?",
+            (provider, model_id, utc_now(), previous["job_id"]),
+        )
+    else:
+        connection.execute(
+            "UPDATE jobs SET status = 'ready', updated_at = ? WHERE id = ?",
+            (utc_now(), previous["job_id"]),
+        )
     connection.execute(
         "INSERT INTO events (job_id, job_video_id, level, kind, message, created_at)"
         " VALUES (?,?,?,?,?,?)",

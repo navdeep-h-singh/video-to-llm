@@ -2,20 +2,18 @@
 
 **For:** a fresh session with full context.
 **Repo:** `~/My Builds/Video Processor for LLMs`
-**HEAD:** `ba6aca8` · 986 tests passing · ruff, mypy, audit, smoke all clean.
+**HEAD:** `1b62e9b` · 1,122 tests passing · ruff, mypy, audit, smoke all clean.
 
 ---
 
 ## Start here
 
-Five pieces were deliberately left unbuilt because they need **design decisions,
-not just implementation**. Do not start coding them.
+The five pieces that were left for design decisions are **now built** — the
+collection wizard, the rest of the settings, targeted reruns, notifications, and
+a generated sample clip. §6 records what was built and, more usefully, what was
+deliberately *not*.
 
-**Your first task: present options for each of the five below — pros, cons, and a
-recommended path — and wait for the operator to choose.** Then build.
-
-They are listed in §6. Everything before that is the context you need to make
-those recommendations well.
+Read §4 (invariants) and §7 (limitations) before changing anything.
 
 ---
 
@@ -69,7 +67,7 @@ apart already caused one 500 and one silently-broken layout.
 ```
 Browser (127.0.0.1 only)
    └── FastAPI + Jinja2 + plain CSS   app/web/
-         ├── SQLite WAL               app/core/db.py, migrations/
+         ├── SQLite WAL               app/core/db.py, migrations/ (002)
          ├── artifacts on disk        app/core/artifacts.py
          └── separate worker process  app/worker/
                ├── FFmpeg + faster-whisper
@@ -81,10 +79,10 @@ Browser (127.0.0.1 only)
 | Config | `app/core/config.py`, `config/settings.example.toml` |
 | Redaction | `app/core/redaction.py` — single home, applied at format time |
 | Locks | `app/core/locks.py` — file lock **and** DB claim |
-| Pipeline | `app/pipeline/` — probe, preflight, frames, audio, transcribe, visual, enrich, assemble, archive, finalize |
+| Pipeline | `app/pipeline/` — probe, preflight, frames, audio, transcribe, visual, enrich, assemble, archive, finalize, rerun |
 | Providers | `app/providers/` — base, ollama_local, cloud, costs, retry |
 | Collections | `app/collections/` — model, tokens, build |
-| Web | `app/web/app.py` (routes), `templates/` (17), `static/tokens.css`, `files.py`, `status.py` |
+| Web | `app/web/app.py` (routes), `templates/` (18), `static/tokens.css`, `files.py`, `status.py` |
 | Docs | `docs/` — 12 files incl. `FINAL_BUILD_REPORT.md` |
 
 ---
@@ -118,190 +116,96 @@ and marks, below the 4.5:1 a 14px label needs. Filled buttons use `accent-700`
 
 ---
 
-## 5. What was just done (audit remediation)
+## 5. What was just done
 
-A UX audit found 24 issues. **19 are fixed** across commits `5a11a04` → `ba6aca8`.
+Two sessions. The first fixed 19 of 24 UX-audit findings (`5a11a04` → `ba6aca8`):
+the frame viewer, file serving with both-sides symlink resolution, live
+progress, the file picker, API key entry, search/rename/delete, and a real
+worker-recovery bug that had left the operator's 13-video job idle for nine
+hours behind a claim held by a dead PID.
 
-Headline fixes:
+The second built the five pieces below (`f1d5a32` → `1b62e9b`).
 
-- **Frame viewer** — the review screen was empty; 2,307 frames on disk and none
-  visible. Now: the frame, its description, transcript lines within ±45s with
-  the current line highlighted, arrow-key navigation, contact sheet.
-- **File serving** (`app/web/files.py`) — nothing was previewable or
-  downloadable. Containment resolves *both* sides (a symlinked root would fail a
-  naive prefix check; a symlink inside the root pointing out would pass one).
-- **Live progress** — every screen was static. Now polls, but only while
-  something runs.
-- **Worker recovery — a real bug.** `run_worker` returned `1` permanently on a
-  claim conflict, so in `start` mode the worker thread died and the UI ran on
-  with no worker. The operator's 13-video job sat idle **nine hours** behind a
-  claim held by a dead PID, 172× past its 120s staleness threshold. Now retries
-  every 20s; `--once` still fails fast.
-- **File picker** — job creation required typing absolute paths.
-- **API key entry** — there was *no field*; four cloud adapters were unreachable.
-- **Search/filter/sort, rename, delete, "add descriptions later"** (a promise the
-  UI had been making with nothing behind it), elapsed times, dated logs, real
-  folder sizes, friendly filenames, "Not run" instead of a permanent "Waiting".
-
-Bugs found by *running* it, not reading it:
+Bugs found by *running* it, across both:
 
 - `/api/progress` 500 — `status` exists on both `stage_runs` and `job_videos`;
   the unqualified join column was ambiguous.
-- The progress query was assembled by concatenating a WHERE clause (ruff caught
-  it). Now two literal statements.
-- **The stylesheet had no cache key**, so an upgrade served a stale copy and the
-  page rendered wrong with nothing pointing at why. Now versioned by mtime.
-
-Full report with severities: `docs/` and the published audit artifact.
-
----
-
-## 6. THE FIVE REMAINING PIECES — your first task
-
-For **each** of the five: give the operator **2–3 concrete options**, the honest
-pros and cons of each, and **your recommendation with reasoning**. Then wait.
-
-Bias the recommendations toward **what makes the investor demo land**, while
-respecting the invariants in §4.
+- The stylesheet had no cache key, so an upgrade served a stale copy.
+- **Every screen hard-reloaded every 5 s** whenever any job ran anywhere, wiping
+  forms mid-edit and resetting the frame viewer. Now compares a server
+  fingerprint, skips dirty forms, and the review screen opts out.
+- The fingerprint could not be `MAX(updated_at)`: timestamps are second-
+  resolution, so two transitions in one second left it unchanged.
+- **`assembled.txt` reported "Pictures 0"** with 20 on disk — the header labelled
+  `len(descriptions)` as "Pictures". The two counts are separate now.
+- **The per-job description choice was decorative.** `jobs.visual_provider` was
+  recorded and displayed but the worker read the *global* setting, so a job
+  created with "skip descriptions" described everything anyway — on a paid
+  provider, money spent on work the user explicitly declined.
+- `HANDOFF.md` itself carried absolute home paths and had been failing the
+  pre-publish audit since it was committed.
 
 ---
 
-### A. Collection wizard: stepper, ordering, and pre-build estimate (F08 + F09)
+## 6. The five pieces — what was built, and what was not
 
-**Current state.** `app/web/templates/newcollection.html` renders a five-step
-header — *1 Choose videos · 2 Set the order · 3 Choose versions · 4 Choose the
-shape · 5 Check and build* — that is **purely decorative**. The page is one flat
-form. Two advertised steps have no interface at all:
+### A. Collection wizard (F08 + F09) — built
 
-- **"Set the order"** — no drag, no move controls, no numbering. Order is
-  whatever sequence the checkboxes happen to produce.
-- **"Choose versions"** — the version column is read-only text.
+Real numbered sections replace the decorative stepper. Ordering is keyboard-first
+(the move buttons are the mechanism; drag is layered on top), announced through a
+live region, with focus following the moved item. Order travels in an explicit
+field. A version select per source makes pinning older output reachable. The
+pre-build estimate runs the **real** `load_sources` + `build_packs` and writes
+nothing — deliberately not a browser-side approximation, which would be a second
+implementation of the packing rule.
 
-There is also **no estimate before building**: total duration, estimated tokens,
-resulting pack count, per-source warnings, and output location are all
-computable from data already in memory when the form renders, and none is shown.
+### B. The rest of the settings (F07) — built
 
-**Why it matters for the demo.** Ordering is the thing the specification is most
-emphatic about, and "drag your videos into the order you want, see the estimate
-update, press build, done in seconds" is one of the strongest live moments
-available. Right now it is a checkbox list.
+Grouped by decision, with worker/concurrency knobs behind an Advanced
+disclosure. `output_root` **repoints and moves nothing**, says so, and is refused
+outright while a worker claim is held or a job is mid-flight. `port` saves and
+states that it needs a restart.
 
-**Constraints.** Order must be explicit and **keyboard-operable** (spec requires
-parity — drag alone is not acceptable). Collection building must stay free,
-local, and non-destructive, so it should *not* acquire heavy confirmation.
+**Not built, on purpose:** `on_limit` is not offered as a control. It is stored
+but no code path consults it, and a control that changes no behaviour is the
+same lie as placeholder data. A test pins that a save does not rewrite it.
 
-**Existing pieces you can build on:** `app/collections/model.py`
-(`set_sources` already takes an ordered list, `assess_source` computes warning
-states), `app/collections/tokens.py` (estimation, already labelled an estimate),
-`app/collections/build.py` (`build_packs` can be dry-run for a pack count).
+### C. Targeted reruns (F12) — built
 
-**Design axes to present options across:**
-- Real multi-page stepper vs. progressive single page vs. keep flat + add the
-  two missing controls.
-- Drag-and-drop + keyboard, or keyboard-only move controls (simpler, no
-  library, fully accessible by construction).
-- Estimate computed server-side on each step, or live in the browser.
+Four scopes: every picture, low confidence only, unusable only, a range. Frames
+and the transcript are carried forward (hard-linked where the filesystem
+allows), and descriptions outside the scope are kept verbatim — they were
+already paid for. A version strip shows what each version produced and switches
+the active one. Offered from the review screen, where low confidence is noticed.
 
----
+**Not built, on purpose:** "a new prompt/schema" as a rerun scope. Changing the
+prompt changes what every field means, so mixing carried-forward descriptions
+with newly-prompted ones inside one version would produce a document whose rows
+are not comparable. It needs a whole-video rerun and a schema-change story of
+its own.
 
-### B. The remaining settings (F07)
+### D. Notifications (F21) — built
 
-**Current state.** Settings exposes six fields: `enabled`, `provider`,
-`model_id`, `endpoint`, `batch_size`, `experimental_acknowledged` — plus the new
-write-only key entry. The config file defines roughly twenty more. Verified
-missing from the UI:
+Always on, no permission: a `<title>` badge and a "finished while you were away"
+banner backed by `jobs.completion_acknowledged_at` (migration 002). Opt-in:
+browser notifications, with permission requested from the tick itself, never on
+load; and a terminal bell from the worker, stderr only when it is a tty.
 
-```
-[general]          output_root
-[server]           port
-[sampling]         preset, custom_interval_seconds
-[transcription]    backend, model, silence_threshold_seconds, language
-[visual_analysis]  budget (hard_limit_usd, on_limit), local_guard
-[ollama]           concurrency
-[worker]           poll_interval_seconds, max_retries, backoff_base_seconds
-[collections]      default_token_limit, default_reserve_tokens, allow_video_split
-```
+**Not built, correctly:** no push service, no email, no menu-bar agent, no
+`launchd`. The spec excludes them and the localhost promise forbids them. A test
+asserts no notification path contains `serviceWorker`, `pushManager`, `mailto:`,
+or an `https://` URL.
 
-So a user must hand-edit TOML for most of what the product can do — including
-**where output goes** and **the spending cap**.
+### E. Sample clip (F22) — built
 
-**Constraints.** `output_root` changing at runtime is the delicate one: the
-worker holds a claim on the current root and the database lives inside it.
-`server.port` cannot take effect without a restart. Some settings are safe to
-change live; others are not, and the UI should not pretend otherwise.
+`app/services/sample.py` draws a 60 s animated bar chart in the product's
+vermilion plus a tone with four deliberate silences. 478 KB, under a second to
+draw, nothing tracked in the repository. Labelled generated test footage
+everywhere, via one shared macro.
 
-**Design axes:** expose everything vs. a curated set with an "advanced"
-disclosure; how to handle settings that need a restart; whether changing the
-output root should offer to move existing work or simply point elsewhere.
-
----
-
-### C. Targeted reruns (F12)
-
-**Current state.** Versioned reruns are designed and schema-backed —
-`job_videos.version`, `is_active_version`, and per-batch records exist, and
-"never overwrite prior expensive output" is tested. **None of it is reachable
-from the UI.** The only rerun path built is the blunt "describe this whole video
-now" added during the audit fixes.
-
-**Why it matters.** This is arguably the strongest *technical* story in the
-product: *we never overwrite what you paid for, we version it.* A technical
-investor will ask what happens when a model gets better, and the answer is good.
-Right now it is invisible.
-
-**Scopes the spec calls for:** a whole video; a batch range; low-confidence
-frames only; frames that produced fallback output; a new prompt/schema/model.
-
-**Design axes:** where the control lives (review screen per-frame? job screen
-per-video? a dedicated rerun screen?); how scope is chosen; how versions are
-presented afterwards and how the user switches the active one; whether a rerun
-that would cost money needs a confirmation distinct from a local one — note
-invariant 3 and the existing budget machinery.
-
----
-
-### D. Notifications when a long job finishes (F21)
-
-**Current state.** Nothing. The product is explicitly built for jobs that run
-for hours while you do something else, and it cannot tell you it is done. Before
-the audit fixes the page did not even refresh itself.
-
-**Constraints — read carefully.** The spec **excludes** OS notification
-registration, `launchd`, Task Scheduler, `systemd`, and any telemetry or
-outbound call. So: no push service, no email, no menu-bar agent.
-
-That leaves in-page options: Web Notifications API (browser permission, works
-only while a tab is open), a `<title>` badge, an audible chime, a persistent
-in-app "finished while you were away" banner, or a terminal bell from the
-worker.
-
-**Design axes:** which of those, in what combination; whether to ask for browser
-notification permission at all (a permission prompt on first run is a poor
-first impression); how "finished while you were away" is tracked across restarts.
-
----
-
-### E. A bundled sample clip (F22)
-
-**Current state.** A fresh install shows an empty dashboard and a readiness
-checklist. There is no way to see what the product produces without supplying
-your own video and waiting.
-
-**Why it matters for the demo.** A one-minute end-to-end run — pick the sample,
-watch the bars move, open the viewer, read `assembled.txt` — is the entire pitch
-in sixty seconds, with nothing to prepare and nothing to type.
-
-**Constraint that shapes this.** The repo must stay publishable: **no personal
-media, no large binaries.** `tests/fixtures/synthetic.py` already generates
-video from FFmpeg's own `testsrc2` + a tone — colour bars, not a realistic
-screen recording.
-
-**Design axes:** ship a generated synthetic clip (safe, publishable, visually
-uninteresting) vs. generate something more chart-like at first run vs. ship a
-tiny genuinely-representative clip (needs a licence story) vs. ship a
-pre-computed *example output* with no video at all so the viewer has something
-to show instantly. Consider that the demo needs the *pipeline* to visibly run,
-not just the output to exist.
+Deliberately not `testsrc2`: colour bars give a description model nothing to say.
+The local model does describe the chart, at Low confidence — which makes the
+low-confidence rerun demonstrable on the sample itself.
 
 ---
 
@@ -320,6 +224,25 @@ not just the output to exist.
   with a stub speech model; real runs use faster-whisper `medium` on CPU.
 - **The event log grows without bound.** Fine now; would want pruning on a
   machine processing thousands of videos.
+- **Describing the sample locally takes about ten minutes**, not the thirty
+  seconds the rest of it takes. `qwen2.5vl:7b` runs at roughly 28 s/frame on this
+  machine, so 20 frames is ~10 min. The sample job therefore declines
+  descriptions and finishes in ~27 s; adding them is a deliberate second step via
+  "Describe again". Worth knowing before demoing that button live.
+- **Whisper hallucinates on the sample's tone.** The transcript opens with
+  "Thanks for watching!" — a known artefact of running a speech model on
+  non-speech audio. It is honest output (the model did report that) and the
+  silence markers around it are correct, but it looks odd on a demo screen.
+  Fixing it means either synthesising speech or suppressing low-probability
+  segments, and both are larger than they sound.
+- **`drawtext` is not in this machine's FFmpeg build** (Homebrew 8.1.2, no
+  libfreetype), so the sample has no on-screen text and `visible_text` comes back
+  Unknown. The chart still varies per frame. A build with libfreetype would allow
+  a richer sample; the generator does not currently attempt it.
+- **`jobs.visual_provider` is `NOT NULL DEFAULT 'none'`**, so there is no way to
+  distinguish "deliberately none" from "never set". Jobs made through
+  `create_job` always carry the right value; anything inserting jobs by raw SQL
+  must set it or the worker will skip descriptions.
 
 ---
 
@@ -341,7 +264,20 @@ not just the output to exist.
 
 ---
 
-## 9. First message to send
+## 9. Where to pick up
 
-> Read `HANDOFF.md`. Then, for each of the five items in §6, give me 2–3 options
-> with honest pros and cons and your recommendation. Don't write any code yet.
+Nothing is half-built. The most useful next moves, roughly in order:
+
+1. **Rehearse the demo end to end on a clean root.** `rm -rf` a scratch folder,
+   point `--output-root` at it, press "Try it with a generated sample", and walk
+   dashboard → job → review → collection. Read §7 first so the sample's two
+   cosmetic quirks do not surprise you live.
+2. **Get a git remote and let CI run.** Windows and Linux have still never
+   executed a line of this. That is the largest untested surface by far.
+3. **Prune the event log**, if any machine is going to process thousands of
+   videos.
+4. **A rerun with a changed prompt or schema**, if the versioning story needs to
+   go further — see §6C for why it was left out rather than bolted on.
+
+Templates load from disk per request; route code does not. **Restart the server
+after changing Python.**
