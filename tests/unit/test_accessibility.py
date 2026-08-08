@@ -292,3 +292,77 @@ def test_buttons_are_real_buttons_not_clickable_divs(client):
     body = client.get("/jobs/j1").text
     assert "<button" in body
     assert "onclick=" not in body
+
+
+# ── Choosing an option is visible ─────────────────────────────────────────
+#
+# The `.pick` cards — how often to take a picture, whether to describe, what
+# shape a collection takes — are labels wrapping a visually-hidden radio. Their
+# only selected-state rule keyed off `[aria-pressed="true"]`, an attribute
+# nothing in the application ever set: a leftover from when `.pick` was a
+# `<button>`. Clicking an option therefore changed nothing on screen, on every
+# screen that uses them.
+
+
+PICK_SCREENS = ["/jobs/new", "/collections/new", "/settings"]
+
+
+def _pick_rules() -> str:
+    css = CSS.read_text(encoding="utf-8")
+    return "\n".join(line for line in css.splitlines() if line.strip().startswith(".pick"))
+
+
+def test_a_chosen_option_is_styled_differently_from_the_others():
+    """The regression. Without this the control is decorative: the radio holds
+    the answer and the screen never says which one it is."""
+    rules = _pick_rules()
+    assert ".pick:has(input:checked)" in rules
+
+
+def test_the_selected_state_is_not_keyed_off_a_dead_attribute():
+    """`aria-pressed` is set nowhere. A rule that can never match is worse than
+    no rule, because it reads as though the state is handled.
+
+    Comments are stripped first: the history of this bug is worth writing down
+    next to the fix, and a test that forbade naming it would be forbidding the
+    explanation rather than the defect.
+    """
+    css = CSS.read_text(encoding="utf-8")
+    rules = re.sub(r"/\*.*?\*/", "", css, flags=re.DOTALL)
+    assert "aria-pressed" not in rules, "the selected state must key off something real"
+
+
+def test_choosing_is_not_signalled_by_colour_alone():
+    """Same rule the status vocabulary follows. A card that differs only in hue
+    is invisible to a large minority of users and in any greyscale printout."""
+    rules = _pick_rules()
+    # The mark itself fills in, which is a change of shape rather than of hue.
+    assert ".pick::before" in rules
+    assert ".pick:has(input:checked)::before" in rules
+
+
+def test_the_selected_card_stays_readable():
+    """Selection tints the ground; the text on it still has to meet AA."""
+    assert contrast(PALETTE["text"], PALETTE["accent-100"]) >= AA_NORMAL
+
+
+def test_the_selection_mark_is_distinguishable_from_the_card_it_sits_on():
+    """It carries meaning, so 3:1 against its surroundings."""
+    assert contrast(PALETTE["accent-700"], PALETTE["accent-100"]) >= AA_LARGE
+    assert contrast(PALETTE["neutral-600"], PALETTE["bg"]) >= AA_LARGE
+
+
+def test_a_keyboard_user_can_see_where_they_are_in_the_group():
+    """The radio is 0x0 and transparent, so without an explicit rule the focus
+    ring lands on something invisible and tabbing appears to do nothing."""
+    assert ".pick:has(input:focus-visible)" in _pick_rules()
+
+
+@pytest.mark.parametrize("path", PICK_SCREENS)
+def test_every_screen_using_the_cards_has_one_chosen_to_begin_with(client, path):
+    """An unanswered radio group with no visible state is indistinguishable
+    from a broken one. Each group starts on a real default."""
+    body = client.get(path).text
+    if 'class="pick"' not in body:
+        pytest.skip(f"{path} does not use the cards")
+    assert "checked" in body
