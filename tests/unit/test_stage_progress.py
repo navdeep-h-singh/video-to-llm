@@ -316,3 +316,42 @@ def test_no_duration_phrase_doubles_its_qualifier():
     for seconds in (45, 120, 300, 3600, 7200, 27000, 40000, 400000):
         phrase = f"{format_span(seconds)} left"
         assert "about about" not in phrase, f"{seconds}s -> {phrase!r}"
+
+
+# ── The estimate on a resumed stage ───────────────────────────────────────
+
+
+def test_a_resumed_stage_does_not_count_inherited_work_as_speed(client, db):
+    """The real numbers, from the run that exposed this.
+
+    Attempt 4 inherited 570 pictures described on earlier attempts, then spent
+    27 minutes describing 50 more. The screen read "about 36 minutes left"
+    because it divided 27 minutes by all 620 — a rate thirteen times faster than
+    anything happening. The honest remainder was nearly eight hours.
+
+    The bar is right to show the inherited work; it is genuinely done. The clock
+    must not be measured against it.
+    """
+    seed(db, stage="visual")
+    _running_since(db, seconds_ago=27 * 60, total=1488, done=620)
+    db.execute("UPDATE stage_runs SET items_skipped = 570 WHERE id = 's1'")
+    db.commit()
+
+    body = client.get("/jobs/j1").text
+
+    assert "620 of 1,488" in body, "the bar should still show the inherited work"
+    assert "36 minutes" not in body and "minutes left" not in body, (
+        "the estimate is still measuring against work this run never performed"
+    )
+    assert "hours left" in body, "no hours-scale estimate for a stage with ~8 left"
+
+
+def test_a_resume_offers_no_estimate_until_it_has_done_something_itself(client, db):
+    """Inherited work alone is no evidence of speed, however much of it there is."""
+    seed(db, stage="visual")
+    _running_since(db, seconds_ago=300, total=1488, done=570)
+    db.execute("UPDATE stage_runs SET items_skipped = 570 WHERE id = 's1'")
+    db.commit()
+
+    body = client.get("/jobs/j1").text
+    assert " left</p>" not in body

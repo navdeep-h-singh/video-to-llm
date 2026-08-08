@@ -208,6 +208,7 @@ def run_visual_analysis(
     should_stop: Any = None,
     on_progress: Callable[[int], None] | None = None,
     on_flush: Callable[[], None] = lambda: None,
+    on_carried: Callable[[int], None] = lambda _count: None,
 ) -> VisualStageResult:
     """Describe every batch, persisting each one before marking it complete.
 
@@ -241,6 +242,10 @@ def run_visual_analysis(
         if batch_index in already_done:
             # Resuming: this batch is already paid for and on disk.
             result.batches_skipped += 1
+            # Counted as done, but performed in no time at all. Reported apart
+            # so the remaining-time estimate divides by work this run actually
+            # did, rather than by a number that includes hours it never spent.
+            on_carried(len(request.frames))
             if batch_index in carried_forward:
                 # Carried, not merely counted. Without this the resumed run wrote
                 # a results file describing only the frames it happened to redo.

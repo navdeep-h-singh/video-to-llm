@@ -2535,7 +2535,7 @@ def _clear_dead_claim(connection: sqlite3.Connection, output_root: Path) -> None
         return
 
 
-def _stage_eta(started_at: str | None, done: int, total: int) -> str:
+def _stage_eta(started_at: str | None, done: int, total: int, carried: int = 0) -> str:
     """How much longer, from how long it has taken so far.
 
     Measured, never assumed. Rate comes from this run on this machine, so it
@@ -2561,11 +2561,21 @@ def _stage_eta(started_at: str | None, done: int, total: int) -> str:
     if elapsed is None or elapsed < 45:
         return ""
 
-    fraction = done / total
-    if fraction >= 1:
+    if done >= total:
         return ""
 
-    remaining = elapsed / fraction - elapsed
+    # Rate comes from work this run performed, not from everything the bar
+    # counts. A resumed stage inherits hundreds of pictures that were described
+    # on an earlier attempt and cost this one no time at all; dividing elapsed
+    # time by the inherited total said "about 36 minutes left" when the honest
+    # answer was nearly eight hours. The bar is right to show the inherited work
+    # — it is genuinely done — but the clock must not be measured against it.
+    performed = done - max(0, carried)
+    if performed <= 0:
+        return ""
+
+    seconds_each = elapsed / performed
+    remaining = seconds_each * (total - done)
     if remaining < 30:
         return "nearly done"
     # No "about" here. format_span already hedges where hedging is warranted —
@@ -2604,7 +2614,8 @@ def _stage_progress(
     # the screen reported that while attempt 2 ran correctly beside it. The
     # display was reading a corpse.
     rows = connection.execute(
-        "SELECT stage, status, items_total, items_done, started_at FROM stage_runs"
+        "SELECT stage, status, items_total, items_done, items_skipped, started_at"
+        " FROM stage_runs"
         " WHERE job_video_id = ? ORDER BY attempt",
         (job_video_id,),
     ).fetchall()
@@ -2636,7 +2647,7 @@ def _stage_progress(
             percent = min(100, int(done * 100 / total))
             detail = formats.get(stage, as_pictures)(done, total)
             if row["status"] == "running":
-                eta = _stage_eta(row["started_at"], done, total)
+                eta = _stage_eta(row["started_at"], done, total, row["items_skipped"] or 0)
         elif row["status"] == "running":
             # Running, but nothing to divide by yet — the stage has not declared
             # its size. This used to print the raw database word "running" at 0%

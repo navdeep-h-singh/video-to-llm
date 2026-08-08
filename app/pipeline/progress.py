@@ -88,6 +88,7 @@ class StageProgress:
 
         self._total: int | None = None
         self._done = 0
+        self._carried = 0
         self._last_write = 0.0
         self._last_event = clock()
 
@@ -108,6 +109,22 @@ class StageProgress:
         """
         self._total = max(0, int(total))
         self._write(force=True)
+
+    def note_carried(self, count: int) -> None:
+        """Record work counted as done that this run did not have to perform.
+
+        A resume recognises hundreds of already-described pictures in under a
+        second. They belong in ``items_done`` — they are genuinely done, and the
+        bar should show them — but they took no time, and anything dividing
+        elapsed time by them gets a rate that is pure fiction. On the real job
+        that read "about 36 minutes left" against a true remainder of nearly
+        eight hours.
+
+        Kept separately so the estimate can measure only what this run actually
+        did. ``items_skipped`` has been in the schema since the first migration
+        with nothing reading it; this is what it was for.
+        """
+        self._carried += max(0, int(count))
 
     def advance_to(self, done: float) -> None:
         """Record absolute progress. Throttled; safe to call in a tight loop."""
@@ -144,9 +161,9 @@ class StageProgress:
 
         try:
             self._connection.execute(
-                "UPDATE stage_runs SET items_total = ?, items_done = ?, updated_at = ?"
-                " WHERE id = ?",
-                (self._total, self._done, utc_now(), self._stage_run_id),
+                "UPDATE stage_runs SET items_total = ?, items_done = ?,"
+                " items_skipped = ?, updated_at = ? WHERE id = ?",
+                (self._total, self._done, self._carried, utc_now(), self._stage_run_id),
             )
         except sqlite3.Error as error:
             # Best-effort by design. The stage is the valuable thing; a progress
