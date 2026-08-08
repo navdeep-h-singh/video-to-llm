@@ -2,7 +2,7 @@
 
 **For:** a fresh session with full context.
 **Repo:** `~/My Builds/Video Processor for LLMs`
-**HEAD:** `1b62e9b` · 1,122 tests passing · ruff, mypy, audit, smoke all clean.
+**HEAD:** `f62a786` · 1,126 tests passing · ruff, mypy, audit, smoke all clean.
 
 ---
 
@@ -124,7 +124,7 @@ progress, the file picker, API key entry, search/rename/delete, and a real
 worker-recovery bug that had left the operator's 13-video job idle for nine
 hours behind a claim held by a dead PID.
 
-The second built the five pieces below (`f1d5a32` → `1b62e9b`).
+The second built the five pieces below (`f1d5a32` → `f62a786`).
 
 Bugs found by *running* it, across both:
 
