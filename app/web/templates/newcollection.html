@@ -150,20 +150,41 @@
     </div>
   </fieldset>
 
+  {#
+    Three numbers with no units and no reason given. "200000" of what, held back
+    from what, and why that number — none of it was on the screen, and all three
+    change what the build produces.
+  #}
   <div class="grid grid-3" style="margin-top:var(--space-4)">
     <div class="field">
       <label for="token-limit">How much fits in one go?</label>
       <input class="input mono" id="token-limit" name="token_limit" type="number"
-             value="{{ settings.collections.default_token_limit }}" min="1000" step="1000">
+             value="{{ settings.collections.default_token_limit }}" min="1000" step="1000"
+             aria-describedby="token-limit-help">
+      <p class="text-muted" id="token-limit-help" style="font-size:12px;margin:var(--space-1) 0 0">
+        In tokens &mdash; very roughly a short word each. This is your model's
+        context window: how much it can be given at one time. 200,000 is common;
+        check the figure for the model you actually use.
+      </p>
     </div>
     <div class="field">
       <label for="reserve">Hold back for your prompt and the reply</label>
       <input class="input mono" id="reserve" name="reserve_tokens" type="number"
-             value="{{ settings.collections.default_reserve_tokens }}" min="0" step="1000">
+             value="{{ settings.collections.default_reserve_tokens }}" min="0" step="1000"
+             aria-describedby="reserve-help">
+      <p class="text-muted" id="reserve-help" style="font-size:12px;margin:var(--space-1) 0 0">
+        Kept free inside that limit for your question and the model's answer.
+        A part that fills the window exactly leaves no room to reply.
+      </p>
     </div>
     <div class="field">
       <label for="model-label">Which model is this for? (optional)</label>
-      <input class="input" id="model-label" name="target_model_label" placeholder="free text">
+      <input class="input" id="model-label" name="target_model_label" placeholder="free text"
+             aria-describedby="model-label-help">
+      <p class="text-muted" id="model-label-help" style="font-size:12px;margin:var(--space-1) 0 0">
+        Recorded with the collection so you can tell later what it was sized for.
+        It changes nothing about how the parts are cut.
+      </p>
     </div>
   </div>
 
@@ -182,6 +203,53 @@
   <div class="estimate" id="estimate" aria-live="polite">
     <p class="text-muted" style="margin:0;font-size:13px">Choose a video to see what you get.</p>
   </div>
+
+  {#
+    What the size figure is, and — more usefully — what it is not.
+
+    It is a raw count of every character in the document, converted at a fixed
+    ratio. Two things follow that the number alone does not say, and both change
+    how someone should read it.
+
+    First, it is not a real tokenisation. Every model counts differently and this
+    is deliberately a documented ratio rather than a per-model tokeniser, which
+    would be a second implementation to keep correct for every provider.
+
+    Second, and the part people are most often surprised by: this is the size of
+    what you hand over, not the work the model does with it. A model given a
+    large document does not have to read all of it evenly — it can search it,
+    skim it, and quote the parts that matter. On this product's own output that
+    gap is wide, because the per-picture descriptions are most of the bulk and
+    the transcript is most of the meaning. Saying so is more honest than letting
+    a large number read as a large cost.
+  #}
+  <details style="margin-top:var(--space-3)">
+    <summary style="cursor:pointer;font-size:13px">What does the size figure mean?</summary>
+    <div style="font-size:13px;margin-top:var(--space-2)">
+      <p style="margin:0 0 var(--space-2)">
+        It is a <strong>raw estimate of the whole document</strong>: every
+        character counted and divided by a fixed ratio &mdash; about
+        {{ chars_per_token }} characters per token.
+        It is not a real tokenisation &mdash; each model counts a little
+        differently &mdash; so treat it as a guide for what will fit, not an
+        exact figure.
+      </p>
+      <p style="margin:0 0 var(--space-2)">
+        It is also the size of what you <em>hand over</em>, not the amount a
+        model has to read. A model given a long document can search it, skim it,
+        and use only the parts that answer your question, so the effort of an
+        answer is usually far smaller than this number suggests.
+      </p>
+      <p style="margin:0">
+        That gap is wide here in particular. The picture descriptions are most of
+        the length and the spoken transcript is most of the meaning, so a
+        collection that looks far too big to use is often mostly detail a model
+        will pass over. Sizing the parts to fit is still worth doing &mdash; it
+        is what stops a paste being refused &mdash; but a large total is not by
+        itself a reason to include less.
+      </p>
+    </div>
+  </details>
 
   <div style="margin-top:var(--space-4);display:flex;gap:var(--space-2)">
     <button class="btn btn-primary" type="submit">Build collection</button>

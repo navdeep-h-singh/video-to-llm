@@ -875,3 +875,96 @@ def test_the_version_in_use_is_named_as_such(db, root):
 
 def test_versions_of_an_unknown_video_is_empty_not_an_error(db):
     assert versions_of(db, "nothing-like-this") == []
+
+
+# ── Explaining the size figure ────────────────────────────────────────────
+
+
+def _collection_form_body(tmp_path):
+    """The build form, rendered with something to collect.
+
+    The form only appears when at least one processed video exists; without a
+    candidate both tests below would be reading an empty state and asserting
+    against markup that was never rendered.
+    """
+    import tempfile
+    from pathlib import Path as _Path
+
+    from fastapi.testclient import TestClient
+
+    from app.core.config import Settings
+    from app.core.db import open_database, utc_now
+    from app.web.app import create_app
+    from tests.loopback import LOOPBACK_BASE_URL
+
+    root = _Path(tempfile.mkdtemp()) / "out"
+    settings = Settings().with_output_root(root)
+    connection = open_database(root)
+    try:
+        connection.execute(
+            "INSERT INTO jobs (id, name, status, output_root, frame_interval_ms,"
+            " visual_provider, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+            ("j1", "Course", "completed", str(root), 2000, "none", utc_now(), utc_now()),
+        )
+        connection.execute(
+            "INSERT INTO job_videos (id, job_id, source_path, display_name, sequence,"
+            " status, output_dir, duration_seconds, is_active_version, created_at,"
+            " updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                "j1v1",
+                "j1",
+                "/src/a.mp4",
+                "a.mp4",
+                0,
+                "completed",
+                "course/v1",
+                60.0,
+                1,
+                utc_now(),
+                utc_now(),
+            ),
+        )
+        connection.commit()
+
+        video_dir = root / "course" / "v1"
+        video_dir.mkdir(parents=True, exist_ok=True)
+        (video_dir / "assembled.txt").write_text("spoken words and pictures", encoding="utf-8")
+
+        with TestClient(create_app(settings), base_url=LOOPBACK_BASE_URL) as client:
+            response = client.get("/collections/new")
+    finally:
+        connection.close()
+
+    assert "Build collection" in response.text, "the form did not render; nothing to assert on"
+    return response.text
+
+
+def test_the_collection_form_explains_its_three_numbers(tmp_path):
+    """Three unlabelled numbers, each changing what the build produces, and no
+    units or reason given for any of them."""
+    body = _collection_form_body(tmp_path)
+
+    assert "context window" in body, "the limit is never named as a context window"
+    assert "leaves no room to reply" in body, "the reserve's purpose is unexplained"
+    assert "changes nothing about how the parts are cut" in body
+
+
+def test_the_size_figure_is_presented_as_raw_and_not_as_effort(tmp_path):
+    """A large total reads as a large cost unless the screen says otherwise.
+
+    It is a raw character count over the whole document. A model given that
+    document can search and skim it, so the work of an answer is usually far
+    smaller — and on this product's output the gap is wide, because the picture
+    descriptions are most of the length and the transcript is most of the
+    meaning.
+    """
+    from app.collections.tokens import CHARS_PER_TOKEN
+
+    body = _collection_form_body(tmp_path)
+
+    assert "raw estimate" in body
+    assert "not a real tokenisation" in body
+    assert "not the amount a" in body, "the hand-over/read-it distinction is missing"
+    # Quoted from the estimator rather than typed into the template, so the
+    # figure on screen cannot drift from the one used to size the parts.
+    assert str(CHARS_PER_TOKEN) in body

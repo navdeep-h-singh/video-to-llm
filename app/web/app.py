@@ -853,7 +853,17 @@ def create_app(settings: Settings) -> FastAPI:
         finally:
             if connection is not None:
                 connection.close()
-        return page(request, "newcollection.html", "newcollection", candidates=candidates)
+        # From the estimator itself, so the number quoted on screen cannot drift
+        # from the one actually used to size the parts.
+        from app.collections.tokens import CHARS_PER_TOKEN
+
+        return page(
+            request,
+            "newcollection.html",
+            "newcollection",
+            candidates=candidates,
+            chars_per_token=CHARS_PER_TOKEN,
+        )
 
     @app.get("/collections/{collection_id}", response_class=HTMLResponse)
     def collection_detail(request: Request, collection_id: str) -> HTMLResponse:
@@ -1453,6 +1463,7 @@ def create_app(settings: Settings) -> FastAPI:
             load_collection,
             set_sources,
         )
+        from app.collections.tokens import CHARS_PER_TOKEN
 
         connection = connect()
         root = current().output_root
@@ -1490,6 +1501,7 @@ def create_app(settings: Settings) -> FastAPI:
                     "newcollection",
                     candidates=collection_candidates(connection, root),
                     problems=problems,
+                    chars_per_token=CHARS_PER_TOKEN,
                     status_code=400,
                 )
 
