@@ -162,12 +162,54 @@ DESCRIBE_CHOICES = {
 }
 
 
+def _with_run_overrides(settings: Settings, args: argparse.Namespace) -> Settings:
+    """Apply the per-run flags that would otherwise only exist on the settings
+    screen.
+
+    Everything here is a copy: the saved settings file is never written by a
+    `process` run. A flag changes this run and nothing else, which is what a
+    terminal user expects and the opposite of what silently persisting would do.
+
+    These exist because a terminal-only user could not reach them at all. That
+    mattered most for the spending cap — the run inherited whatever number was in
+    a file they may never have opened.
+    """
+    from dataclasses import replace
+
+    visual = settings.visual_analysis
+    transcription = settings.transcription
+
+    if args.language:
+        transcription = replace(transcription, language=args.language)
+    if args.transcribe_model:
+        transcription = replace(transcription, model=args.transcribe_model)
+
+    if args.budget is not None:
+        visual = replace(visual, budget=replace(visual.budget, hard_limit_usd=args.budget))
+    if args.max_frames is not None or args.max_minutes is not None:
+        guard = visual.local_guard
+        visual = replace(
+            visual,
+            local_guard=replace(
+                guard,
+                max_frames_per_run=(
+                    args.max_frames if args.max_frames is not None else guard.max_frames_per_run
+                ),
+                max_runtime_minutes=(
+                    args.max_minutes if args.max_minutes is not None else guard.max_runtime_minutes
+                ),
+            ),
+        )
+
+    return replace(settings, transcription=transcription, visual_analysis=visual)
+
+
 def cmd_process(args: argparse.Namespace) -> int:
     """Create a job for the given videos and run it to completion."""
     from app.core.config import MAX_INTERVAL_SECONDS, MIN_INTERVAL_SECONDS
     from app.services.headless import process_videos
 
-    settings = _resolve_settings(args)
+    settings = _with_run_overrides(_resolve_settings(args), args)
 
     paths = [Path(p).expanduser() for p in args.videos]
     provider = DESCRIBE_CHOICES[args.describe]
@@ -298,6 +340,65 @@ def cmd_export(args: argparse.Namespace) -> int:
     return 0 if wrote else 1
 
 
+def cmd_config(args: argparse.Namespace) -> int:
+    """Print the settings this machine will run under, and where they live.
+
+    A terminal-only user had no way to see any of this. The spending cap in
+    particular was invisible: it lives in a file they may never have opened, and
+    it governs what a `--describe anthropic` run is allowed to spend.
+
+    Read-only on purpose. Writing settings from here would mean a second place
+    that owns them, and the file is already shared with a running interface that
+    would not see the change.
+    """
+    from app.core.config import PROVIDER_LABELS, settings_file
+
+    settings = _resolve_settings(args)
+    visual = settings.visual_analysis
+
+    def line(label: str, value: object) -> str:
+        return f"  {label:<28} {value}"
+
+    print(f"Settings file   {settings_file()}")
+    print(f"Output folder   {settings.output_root}")
+    print("  (change either with --output-root, or on the Settings screen)")
+
+    print("\nPictures")
+    print(line("every", f"{settings.sampling.interval_ms() / 1000:g} seconds"))
+
+    print("\nSpoken words")
+    print(line("model", settings.transcription.model))
+    print(line("language", settings.transcription.language))
+    print(line("mark quiet longer than", f"{settings.transcription.silence_threshold_seconds:g}s"))
+
+    print("\nDescribing pictures")
+    print(line("default", PROVIDER_LABELS.get(visual.provider, visual.provider)))
+    for provider, model in sorted(visual.models.items()):
+        if model:
+            print(line(f"model for {provider}", model))
+    print(line("spending cap", f"${visual.budget.hard_limit_usd:,.2f}"))
+    print(line("at the cap", visual.budget.on_limit))
+    print(line("most pictures per run", visual.local_guard.max_frames_per_run or "no limit"))
+    print(
+        line(
+            "longest run",
+            f"{visual.local_guard.max_runtime_minutes} min"
+            if visual.local_guard.max_runtime_minutes
+            else "no limit",
+        )
+    )
+
+    print("\nOn this computer")
+    print(line("Ollama address", settings.ollama.endpoint))
+    print(line("pictures per request", settings.ollama.batch_size))
+
+    print("\nNo key is shown here, or anywhere else. Keys live in this computer's")
+    print("secure store and are never rendered back, not even a prefix.")
+    print("\nOverride any of the describing or spoken-words values for one run:")
+    print("  video-to-llm process VIDEO --budget 5 --language en --transcribe-model small")
+    return 0
+
+
 def cmd_mcp(args: argparse.Namespace) -> int:
     """Serve the MCP tools on stdio, for an agent host to connect to."""
     from app.mcp.server import run
@@ -351,6 +452,43 @@ def build_parser() -> argparse.ArgumentParser:
     )
     process.add_argument(
         "--model", default=None, help="Model to describe with (default: the one in settings)"
+    )
+
+    # Everything below is settable on the settings screen and was, until now,
+    # unreachable from a terminal. `--budget` is the one that mattered: a
+    # terminal-only user was running under whatever cap happened to be in a file.
+    process.add_argument(
+        "--budget",
+        type=float,
+        default=None,
+        metavar="USD",
+        help="Stop this job's spending at this much. Only applies to a paid service.",
+    )
+    process.add_argument(
+        "--language",
+        default=None,
+        metavar="CODE",
+        help="Spoken language, e.g. en, es, de. Naming it beats auto-detection.",
+    )
+    process.add_argument(
+        "--transcribe-model",
+        default=None,
+        metavar="NAME",
+        help="Speech model size: tiny, base, small, medium, large-v3. Bigger is slower.",
+    )
+    process.add_argument(
+        "--max-frames",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Describe at most this many pictures in this run. 0 means no limit.",
+    )
+    process.add_argument(
+        "--max-minutes",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Stop describing after this long. 0 means no limit.",
     )
     process.add_argument(
         "--format",
@@ -414,6 +552,13 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("smoke-test", help="End-to-end run on generated media, no network").set_defaults(
         func=cmd_smoke_test
     )
+
+    sub.add_parser(
+        "config",
+        help="Show the settings this machine will run under, and where they live",
+        description="Read-only. Shows the spending cap, the speech model, the picture "
+        "interval, and where the settings file is. Never shows a key.",
+    ).set_defaults(func=cmd_config)
 
     sub.add_parser(
         "mcp",

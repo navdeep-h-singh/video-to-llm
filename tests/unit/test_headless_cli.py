@@ -38,6 +38,7 @@ from app.services.citation import (
     video_dirs,
 )
 from app.services.export import EXPORTERS, ExportError, export_video_dir, read_timeline
+from tests.fixtures.synthetic import ffmpeg_available, make_video
 
 # ── The parser offers what the documentation promises ─────────────────────
 
@@ -50,6 +51,7 @@ DOCUMENTED_COMMANDS = {
     "show",
     "export",
     "mcp",
+    "config",
     "start",
     "start-ui",
     "run-worker",
@@ -110,6 +112,125 @@ def test_describe_choices_name_real_providers():
         if value == "none":
             continue
         assert value in PROVIDER_LABELS, f"{value} is not a provider this app offers"
+
+
+# ── Per-run overrides ─────────────────────────────────────────────────────
+#
+# Everything the settings screen offers per job was, until now, unreachable from
+# a terminal. The spending cap is the one that mattered: a terminal-only user
+# ran under whatever number happened to be in a file they may never have opened.
+
+
+def _parsed(*argv: str):
+    return build_parser().parse_args(["process", "a.mp4", *argv])
+
+
+def test_a_run_without_flags_changes_nothing():
+    """The subject of every test below: with no flags, the saved settings are
+    what runs. An override that applied by default would be worse than none."""
+    from app.cli.main import _with_run_overrides
+
+    base = Settings()
+    assert _with_run_overrides(base, _parsed()) == base
+
+
+def test_the_spending_cap_can_be_set_for_one_run():
+    from app.cli.main import _with_run_overrides
+
+    overridden = _with_run_overrides(Settings(), _parsed("--budget", "5"))
+    assert overridden.visual_analysis.budget.hard_limit_usd == 5.0
+
+
+@pytest.mark.skipif(not ffmpeg_available(), reason="needs ffmpeg to make a real video")
+def test_the_spending_cap_reaches_the_job_row(tmp_path):
+    """Overriding the settings object is not the point.
+
+    The number the worker checks against before every request is the one stored
+    on the job. This goes through `create_job` with a real video so the whole
+    path is covered — an override that stopped at the settings object would look
+    correct in every other test here and protect nobody.
+    """
+    from app.cli.main import _with_run_overrides
+    from app.services.jobs import create_job
+
+    source = make_video(tmp_path / "clip.mp4", duration_seconds=2)
+
+    settings = _with_run_overrides(
+        Settings().with_output_root(tmp_path / "out"), _parsed("--budget", "7.5")
+    )
+    connection = open_database(settings.output_root)
+    try:
+        created = create_job(
+            connection,
+            settings,
+            name="clip",
+            paths=[source.path],
+            provider="anthropic",
+            model_id="claude-x",
+        )
+        assert created.ok, created.problems
+
+        stored = connection.execute(
+            "SELECT budget_limit_usd FROM jobs WHERE id = ?", (created.job_id,)
+        ).fetchone()["budget_limit_usd"]
+        assert stored == 7.5
+    finally:
+        connection.close()
+
+
+def test_the_speech_model_and_language_can_be_set_for_one_run():
+    from app.cli.main import _with_run_overrides
+
+    overridden = _with_run_overrides(
+        Settings(), _parsed("--language", "es", "--transcribe-model", "small")
+    )
+    assert overridden.transcription.language == "es"
+    assert overridden.transcription.model == "small"
+
+
+def test_the_runaway_guards_can_be_set_for_one_run():
+    from app.cli.main import _with_run_overrides
+
+    overridden = _with_run_overrides(
+        Settings(), _parsed("--max-frames", "200", "--max-minutes", "30")
+    )
+    assert overridden.visual_analysis.local_guard.max_frames_per_run == 200
+    assert overridden.visual_analysis.local_guard.max_runtime_minutes == 30
+
+
+def test_setting_one_guard_leaves_the_other_alone():
+    """`replace` on a nested dataclass is easy to write so that it resets the
+    sibling field to its default. Zero means "no limit", so that failure would
+    silently remove a limit the user had set."""
+    from dataclasses import replace
+
+    from app.cli.main import _with_run_overrides
+
+    plain = Settings()
+    base = replace(
+        plain,
+        visual_analysis=replace(
+            plain.visual_analysis,
+            local_guard=replace(plain.visual_analysis.local_guard, max_runtime_minutes=45),
+        ),
+    )
+
+    overridden = _with_run_overrides(base, _parsed("--max-frames", "10"))
+    assert overridden.visual_analysis.local_guard.max_frames_per_run == 10
+    assert overridden.visual_analysis.local_guard.max_runtime_minutes == 45
+
+
+def test_overrides_never_write_the_settings_file(tmp_path, monkeypatch):
+    """A flag changes this run and nothing else. Persisting it would surprise
+    the next run and would fight with a running interface holding the same file."""
+    from app.cli.main import _with_run_overrides
+    from app.core import config as config_module
+
+    target = tmp_path / "settings.toml"
+    monkeypatch.setattr(config_module, "settings_file", lambda: target)
+
+    _with_run_overrides(Settings(), _parsed("--budget", "1", "--language", "fr"))
+    assert not target.exists()
 
 
 # ── Timestamps ────────────────────────────────────────────────────────────
