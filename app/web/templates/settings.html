@@ -232,12 +232,14 @@
     {% for entry in credentials %}
     <div class="key-row">
       <div class="key-name">
-        <strong>{{ {'anthropic':'Claude','google':'Google Gemini','openai':'OpenAI',
-                    'openai_compatible':'Another service'}.get(entry.provider, entry.provider) }}</strong>
+        <strong>{{ entry.label }}</strong>
+        {#
+          The tag and the sentence used to say the same thing twice — "No key
+          set" above "No key set." The detail sentence carries strictly more
+          information, so the tag only appears when it adds something.
+        #}
         {% if entry.status.present %}
           <span class="tag tag-neutral">Key set</span>
-        {% else %}
-          <span class="text-muted" style="font-size:12px">No key set</span>
         {% endif %}
         <div class="text-muted" style="font-size:12px">{{ entry.status.detail }}</div>
       </div>
@@ -263,13 +265,63 @@
         <button class="btn btn-ghost" type="submit">Remove</button>
       </form>
       {% endif %}
+
+      {#
+        Model and address sit with the service they belong to. This used to be a
+        single model box for the whole application, so choosing Claude and then
+        switching to Gemini asked Google for a Claude model.
+
+        "Check" asks the service what it offers. Deliberately a button rather
+        than something that happens on load: it is a call to another company's
+        computer, and it should happen because you asked. It sends no picture
+        and no video, and a service that answers with a catalogue is one your
+        key works against — so it doubles as the key check.
+      #}
+      <div class="key-model" data-provider="{{ entry.provider }}"
+           style="flex-basis:100%;display:flex;gap:var(--space-2);align-items:flex-end;flex-wrap:wrap;margin-top:var(--space-2)">
+        {% if entry.needs_address %}
+        <div class="field" style="margin:0">
+          <label for="url-{{ entry.provider }}" style="font-size:12px">Address</label>
+          <input class="input mono" id="url-{{ entry.provider }}" name="base_url"
+                 value="{{ entry.base_url }}" placeholder="https://gateway.example/api"
+                 spellcheck="false" style="max-width:280px">
+        </div>
+        {% endif %}
+
+        <div class="field" style="margin:0;flex:1;min-width:220px">
+          <label for="model-{{ entry.provider }}" style="font-size:12px">Model</label>
+          <input class="input mono" id="model-{{ entry.provider }}" name="model_id"
+                 list="models-{{ entry.provider }}" value="{{ entry.model }}"
+                 placeholder="Not chosen yet" spellcheck="false">
+          {# Populated by Check. Free text either way: a fixed catalogue would be
+             wrong the week a service renames something. #}
+          <datalist id="models-{{ entry.provider }}"></datalist>
+        </div>
+
+        <button class="btn btn-secondary" type="button" data-check-models>Check</button>
+        <span class="check-result text-muted" style="font-size:12px" role="status"></span>
+      </div>
     </div>
     {% endfor %}
   </div>
   <p class="text-muted" style="font-size:12px;margin-top:var(--space-2)">
-    Keys live in this computer's secure store, or in the environment for this
-    session only. They are never written to a file, never shown back, and never
-    included in any output or collection.
+    {#
+      Say what is true here, not both possibilities. Enumerating them made a
+      reader on a Mac — where the Keychain is always available — conclude they
+      would be retyping keys every session. The "session only" half is real, but
+      only on a machine with no secure store: a headless Linux box, a container,
+      an SSH session with no keyring daemon.
+    #}
+    {% if secure_store %}
+    Keys are kept in this computer's secure store and stay there until you remove
+    them. They are never written to a file, never shown back, and never included
+    in any output or collection.
+    {% else %}
+    This computer has no secure store available, so a key can only be read from
+    the environment and lasts for this session. To keep one, set the service's
+    environment variable before starting. Keys are never written to a file, never
+    shown back, and never included in any output or collection.
+    {% endif %}
   </p>
 </div>
 
@@ -543,6 +595,49 @@
 
 {% block scripts %}
 <script>
+  // Ask a service what it offers, and put the answer in that service's own
+  // model box. One delegated listener rather than one per row: the rows are
+  // generated, and a handler attached per element is a handler someone forgets
+  // to attach to the next one.
+  document.addEventListener("click", function (event) {
+    var button = event.target.closest("[data-check-models]");
+    if (!button) return;
+
+    var row = button.closest(".key-model");
+    var result = row.querySelector(".check-result");
+    var list = row.querySelector("datalist");
+    var address = row.querySelector('[name="base_url"]');
+
+    var body = new URLSearchParams();
+    body.set("provider", row.dataset.provider);
+    if (address) body.set("base_url", address.value);
+
+    button.disabled = true;
+    result.textContent = "Checking\u2026";
+
+    fetch("/api/providers/models", { method: "POST", body: body })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        button.disabled = false;
+        if (!data.ok) { result.textContent = data.detail || "Could not check."; return; }
+
+        list.innerHTML = "";
+        (data.models || []).forEach(function (name) {
+          var option = document.createElement("option");
+          option.value = name;
+          list.appendChild(option);
+        });
+        // The count says the key worked and how much there is to choose from,
+        // without pretending to recommend one.
+        result.textContent = data.detail
+          || (data.models.length + " available \u2014 the box now suggests them.");
+      })
+      .catch(function () {
+        button.disabled = false;
+        result.textContent = "Could not reach this service.";
+      });
+  });
+
   // The permission prompt belongs to the moment the user asks for the feature,
   // not to page load. Asking on first run puts a browser dialog in front of
   // someone who has not yet seen the product do anything, and the reliable

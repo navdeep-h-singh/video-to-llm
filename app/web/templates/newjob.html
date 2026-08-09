@@ -3,6 +3,102 @@
 
 {% block scripts %}
 <script>
+  // Choosing a service, and setting one up without leaving this form.
+  //
+  // The panel is revealed rather than always shown: a list of accounts is noise
+  // to someone who has already decided to keep everything on their own machine.
+  (function () {
+    var panel = document.getElementById("service-picker");
+    if (!panel) return;
+    var chosenModel = document.getElementById("chosen-model");
+
+    function currentRow() {
+      var picked = panel.querySelector('input[name="service"]:checked');
+      return picked ? picked.closest(".key-row") : null;
+    }
+
+    // The model that travels with the job is the one belonging to the service
+    // actually selected — not whichever box was typed in last.
+    function syncModel() {
+      var row = currentRow();
+      var field = row && row.querySelector("[data-model]");
+      chosenModel.value = field ? field.value.trim() : "";
+    }
+
+    function syncVisible() {
+      var external = document.querySelector('input[name="provider"][value="external"]');
+      panel.hidden = !(external && external.checked);
+      syncModel();
+    }
+
+    document.addEventListener("change", function (event) {
+      if (event.target.name === "provider" || event.target.name === "service") syncVisible();
+    });
+    document.addEventListener("input", function (event) {
+      if (event.target.hasAttribute && event.target.hasAttribute("data-model")) syncModel();
+    });
+    panel.addEventListener("submit", function (event) { event.preventDefault(); });
+
+    function post(url, fields) {
+      var body = new URLSearchParams();
+      Object.keys(fields).forEach(function (k) { body.set(k, fields[k]); });
+      return fetch(url, { method: "POST", body: body }).then(function (r) { return r.json(); });
+    }
+
+    document.addEventListener("click", function (event) {
+      var row = event.target.closest(".key-row");
+      if (!row || !panel.contains(row)) return;
+
+      var result = row.querySelector(".check-result");
+      var address = row.querySelector("[data-address]");
+      var provider = row.dataset.provider;
+
+      if (event.target.closest("[data-save-key]")) {
+        var field = row.querySelector("[data-key-field]");
+        result.textContent = "Saving\u2026";
+        post("/api/providers/key", { provider: provider, key: field.value })
+          .then(function (data) {
+            // The field is cleared either way: a key that has been stored is
+            // never shown back, and one that was refused should not sit around
+            // looking accepted.
+            field.value = "";
+            result.textContent = data.ok ? "Key saved. It stays on this computer." : data.detail;
+          })
+          .catch(function () { result.textContent = "Could not save the key."; });
+        return;
+      }
+
+      if (event.target.closest("[data-check-models]")) {
+        var button = event.target.closest("[data-check-models]");
+        var list = row.querySelector("datalist");
+        button.disabled = true;
+        result.textContent = "Checking\u2026";
+        post("/api/providers/models", {
+          provider: provider,
+          base_url: address ? address.value : ""
+        })
+          .then(function (data) {
+            button.disabled = false;
+            if (!data.ok) { result.textContent = data.detail || "Could not check."; return; }
+            list.innerHTML = "";
+            (data.models || []).forEach(function (name) {
+              var option = document.createElement("option");
+              option.value = name;
+              list.appendChild(option);
+            });
+            result.textContent = data.detail
+              || (data.models.length + " available \u2014 the box now suggests them.");
+          })
+          .catch(function () {
+            button.disabled = false;
+            result.textContent = "Could not reach this service.";
+          });
+      }
+    });
+
+    syncVisible();
+  })();
+
   // Browse the machine for videos rather than typing absolute paths — the worst
   // interaction in the product, and one a localhost application has no reason to
   // impose.
@@ -210,6 +306,74 @@
       </label>
       {% endfor %}
     </div>
+    {#
+      Revealed by the "Send to a service" card, because a list of accounts is
+      noise to someone who has already decided to keep everything local — and
+      §12 of the invariants: no API terminology before the user opts in.
+
+      A service with no key is still offered, with the means to set one up right
+      here. Hiding it would answer "why is my provider missing" with silence;
+      sending the user to Settings would lose the form they have half filled in.
+    #}
+    <div id="service-picker" hidden style="margin-top:var(--space-3)">
+      <h5 style="margin:0 0 var(--space-2)">Which service?</h5>
+      <div class="keys">
+        {% for svc in services | default([], true) %}
+        <div class="key-row" data-provider="{{ svc.provider }}"
+             style="display:block;padding:var(--space-3)">
+          <label style="display:flex;align-items:center;gap:var(--space-2);cursor:pointer">
+            <input type="radio" name="service" value="{{ svc.provider }}"
+                   {% if loop.first %}checked{% endif %}>
+            <strong>{{ svc.label }}</strong>
+            {% if svc.ready %}
+              <span class="tag tag-neutral">Key set</span>
+            {% else %}
+              <span class="text-muted" style="font-size:12px">Needs a key</span>
+            {% endif %}
+          </label>
+
+          <div style="display:flex;gap:var(--space-2);flex-wrap:wrap;align-items:flex-end;margin-top:var(--space-2)">
+            {% if not svc.ready %}
+            {# Write-only, exactly as in Settings. Saved to the same secure
+               store by the same code — this is another way to ask, not another
+               place to keep it. #}
+            <div class="field" style="margin:0">
+              <label for="job-key-{{ svc.provider }}" style="font-size:12px">Key</label>
+              <input class="input" id="job-key-{{ svc.provider }}" type="password"
+                     data-key-field autocomplete="off" spellcheck="false"
+                     placeholder="Paste a key" style="max-width:220px">
+            </div>
+            <button class="btn btn-secondary" type="button" data-save-key>Save key</button>
+            {% endif %}
+
+            {% if svc.needs_address %}
+            <div class="field" style="margin:0">
+              <label for="job-url-{{ svc.provider }}" style="font-size:12px">Address</label>
+              <input class="input mono" id="job-url-{{ svc.provider }}" name="base_url_display"
+                     data-address value="{{ svc.base_url }}" spellcheck="false"
+                     placeholder="https://gateway.example/api" style="max-width:240px">
+            </div>
+            {% endif %}
+
+            <div class="field" style="margin:0;flex:1;min-width:200px">
+              <label for="job-model-{{ svc.provider }}" style="font-size:12px">Model</label>
+              <input class="input mono" id="job-model-{{ svc.provider }}" data-model
+                     list="job-models-{{ svc.provider }}" value="{{ svc.model }}"
+                     placeholder="Not chosen yet" spellcheck="false">
+              <datalist id="job-models-{{ svc.provider }}"></datalist>
+            </div>
+            <button class="btn btn-secondary" type="button" data-check-models>Check</button>
+            <span class="check-result text-muted" style="font-size:12px" role="status"></span>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {# The chosen row's model travels with the job, so a later change to the
+         global settings cannot retroactively alter what this job was asked to
+         use. #}
+      <input type="hidden" name="model_id" id="chosen-model">
+    </div>
+
     <p class="note note-neutral" style="margin-top:var(--space-3)">
       Descriptions are optional. A job without them still produces pictures and a
       transcript with the timeline preserved, and you can add descriptions later

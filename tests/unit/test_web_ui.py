@@ -11,6 +11,7 @@ late:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -291,16 +292,36 @@ def test_progress_bars_expose_their_value(client, db):
     assert "aria-valuenow" in body
 
 
-def test_no_external_resource_is_referenced(client):
+EXTERNAL_REFERENCE = re.compile(
+    r"""(?:src|href)\s*=\s*["']https?://   # a script, style, image or link
+      | url\(\s*["']?https?://              # a CSS resource
+      | @import\s+["']?https?://            # a CSS import
+      | fetch\(\s*["']https?://            # a scripted request
+    """,
+    re.VERBOSE | re.IGNORECASE,
+)
+
+
+@pytest.mark.parametrize("screen", ["/", "/settings", "/jobs/new", "/collections/new"])
+def test_no_external_resource_is_referenced(client, screen):
     """The header badge promises nothing is uploaded.
 
     A stylesheet, font, or script fetched from another host would contradict it
     on every page load, whatever the rest of the application does.
+
+    Matched in the positions that actually cause a fetch, rather than by looking
+    for the text "https://" anywhere on the page. Settings now legitimately
+    shows an example address in a placeholder — for an endpoint the *user*
+    supplies — and a substring search cannot tell that apart from a CDN link.
+    Checking every screen rather than only the dashboard, which is what a
+    substring search over two pages was accidentally standing in for.
     """
-    body = client.get("/").text
-    for marker in ("http://", "https://", "//fonts.", "cdn."):
-        # Allow only same-origin relative references.
-        assert marker not in body.replace("http://127.0.0.1", ""), marker
+    body = client.get(screen).text.replace("http://127.0.0.1", "")
+
+    found = EXTERNAL_REFERENCE.search(body)
+    assert not found, f"{screen} references an off-origin resource: {found.group(0)!r}"
+    for marker in ("//fonts.", "cdn."):
+        assert marker not in body, f"{screen} references {marker}"
 
 
 # ── Status vocabulary ─────────────────────────────────────────────────────
@@ -1027,7 +1048,11 @@ def test_nothing_about_notifications_reaches_off_the_machine(client, db):
     finish_job(db)
     body = client.get("/").text + client.get("/settings").text
 
-    for outbound in ("https://", "serviceWorker", "pushManager", "mailto:"):
+    # No push service, no email, no worker. The "no off-origin resource" half of
+    # this now lives in test_no_external_resource_is_referenced, which checks the
+    # positions that cause a fetch instead of searching for a substring that a
+    # user-supplied-address placeholder also matches.
+    for outbound in ("serviceWorker", "pushManager", "mailto:"):
         assert outbound not in body, f"{outbound!r} appears in a notification path"
 
 

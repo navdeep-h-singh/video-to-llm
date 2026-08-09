@@ -622,7 +622,34 @@ def create_app(settings: Settings) -> FastAPI:
 
     @app.get("/jobs/new", response_class=HTMLResponse)
     def new_job(request: Request) -> HTMLResponse:
-        return page(request, "newjob.html", "newjob")
+        return page(request, "newjob.html", "newjob", services=describable_services())
+
+    def describable_services() -> list[dict[str, Any]]:
+        """Every service that can describe pictures, and what it needs.
+
+        The choice used to be a single card reading "Send to a service", with
+        *which* service settled elsewhere in Settings — so the job screen asked a
+        question it would not let you answer, and someone with three accounts had
+        to leave, change a global, and come back.
+        """
+        from app.core.config import CUSTOM_ENDPOINT_PROVIDERS as CUSTOM
+        from app.credentials.store import credential_status
+
+        active = current()
+        from app.core.config import PROVIDER_LABELS
+
+        cloud = [n for n in PROVIDER_LABELS if n != "ollama_local"]
+        return [
+            {
+                "provider": name,
+                "label": PROVIDER_LABELS[name],
+                "ready": credential_status(name).present,
+                "model": active.visual_analysis.model_for(name),
+                "base_url": active.visual_analysis.base_urls.get(name, ""),
+                "needs_address": name in CUSTOM,
+            }
+            for name in cloud
+        ]
 
     @app.get("/jobs/{job_id}", response_class=HTMLResponse)
     def job_detail(request: Request, job_id: str) -> Response:
@@ -1044,6 +1071,8 @@ def create_app(settings: Settings) -> FastAPI:
         paths: str = Form(""),
         interval: str = Form("2000"),
         provider: str = Form("none"),
+        service: str = Form(""),
+        model_id: str = Form(""),
     ) -> Response:
         from app.services.jobs import create_job, parse_paths
 
@@ -1056,16 +1085,24 @@ def create_app(settings: Settings) -> FastAPI:
         except ValueError:
             interval_ms = None
 
-        # "external" is the design's grouping for "a service you have an
-        # account with". The specific service is chosen in Settings, so an
-        # unconfigured choice becomes none rather than a broken job.
+        # "external" is the design's grouping for "a service you have an account
+        # with". Which one is now answered on this screen: the card is the
+        # grouping, `service` is the answer. Falling back to the global setting
+        # is kept for a submission that names no service, so an older bookmark
+        # or a form without JavaScript still behaves as it used to rather than
+        # silently producing a job that describes nothing.
         resolved = provider
         if provider == "external":
-            resolved = (
-                current().visual_analysis.provider
-                if current().visual_analysis.provider not in {"none", "ollama_local"}
-                else "none"
-            )
+            chosen = service.strip()
+            if chosen and chosen in PROVIDERS:
+                resolved = chosen
+            else:
+                fallback = current().visual_analysis.provider
+                resolved = fallback if fallback not in {"none", "ollama_local"} else "none"
+
+        # The model travels with the job, so a later change to the global
+        # settings cannot retroactively alter what this job was asked to use.
+        chosen_model = model_id.strip() or current().visual_analysis.model_for(resolved)
 
         try:
             result = create_job(
@@ -1075,7 +1112,7 @@ def create_app(settings: Settings) -> FastAPI:
                 paths=parse_paths(paths),
                 interval_ms=interval_ms,
                 provider=resolved,
-                model_id=current().visual_analysis.model_id,
+                model_id=chosen_model,
             )
             if result.ok:
                 return RedirectResponse(f"/jobs/{result.job_id}", status_code=303)
@@ -1086,6 +1123,7 @@ def create_app(settings: Settings) -> FastAPI:
                 problems=result.problems,
                 submitted_name=name,
                 submitted_paths=paths,
+                services=describable_services(),
             )
         finally:
             connection.close()
@@ -1764,16 +1802,37 @@ def create_app(settings: Settings) -> FastAPI:
         health: Any = None,
         draft: Settings | None = None,
     ) -> HTMLResponse:
-        from app.credentials.store import ENV_VARS, credential_status
+        from app.core.config import CUSTOM_ENDPOINT_PROVIDERS as CUSTOM
+        from app.core.config import PROVIDER_LABELS
+        from app.credentials.store import ENV_VARS, credential_status, secure_store_available
 
+        shown = draft or current()
         credentials = [
-            {"provider": name, "status": credential_status(name)}
-            for name in ("anthropic", "google", "openai", "openai_compatible")
+            {
+                "provider": name,
+                "label": PROVIDER_LABELS[name],
+                "status": credential_status(name),
+                "model": shown.visual_analysis.model_for(name),
+                "base_url": shown.visual_analysis.base_urls.get(name, ""),
+                "needs_address": name in CUSTOM,
+            }
+            for name in (
+                "anthropic",
+                "google",
+                "openai",
+                "openai_compatible",
+                "anthropic_compatible",
+            )
         ]
         return page(
             request,
             "settings.html",
             "settings",
+            # Said once, for this machine, rather than enumerating both cases and
+            # leaving the reader to work out which applies to them. Someone who
+            # reads "or in the environment for this session only" reasonably
+            # concludes they will be retyping keys every morning.
+            secure_store=secure_store_available(),
             report=run_doctor(current()),
             credentials=credentials,
             env_vars=ENV_VARS,
@@ -2581,6 +2640,31 @@ def create_app(settings: Settings) -> FastAPI:
         except CredentialError as error:
             return _settings_page(request, problems=[str(error)])
         return RedirectResponse("/settings?saved=key", status_code=303)
+
+    @app.post("/api/providers/key")
+    def save_key_json(provider: str = Form(""), key: str = Form("")) -> JSONResponse:
+        """Store a key and report the result as data rather than as a redirect.
+
+        The same storage as the settings form — this is not a second way to keep
+        a key, only a second way to ask. It exists so the new-job screen can
+        accept a key without navigating away from a form the user has already
+        half filled in, which is the situation where being sent to Settings and
+        back loses the most work.
+
+        Write-only here too: the response says whether a key is now present, and
+        never what it is.
+        """
+        from app.credentials.store import CredentialError, credential_status, set_credential
+
+        if not key.strip():
+            return JSONResponse({"ok": False, "detail": "Paste a key first."})
+        try:
+            set_credential(provider, key)
+        except CredentialError as error:
+            return JSONResponse({"ok": False, "detail": str(error)})
+
+        status = credential_status(provider)
+        return JSONResponse({"ok": True, "present": status.present, "detail": status.detail})
 
     @app.post("/settings/key/remove")
     def remove_key(provider: str = Form("")) -> Response:

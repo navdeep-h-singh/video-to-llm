@@ -165,6 +165,24 @@ DESCRIPTION_PROVIDERS: tuple[str, ...] = (
 )
 
 
+#: What each service is called on screen. One place, so the settings screen and
+#: the job screen cannot drift into calling the same service two things.
+#:
+#: Deliberately free of "endpoint", "API" and "inference": a first-time user
+#: meets these names before deciding to send anything anywhere, and invariant 12
+#: says no API terminology before the user opts in. "Another service (OpenAI
+#: format)" says the useful part — that it speaks a shape you can point at your
+#: own address — without requiring the reader to know the word.
+PROVIDER_LABELS: dict[str, str] = {
+    "ollama_local": "On this computer",
+    "anthropic": "Claude",
+    "google": "Google Gemini",
+    "openai": "OpenAI",
+    "openai_compatible": "Another service (OpenAI format)",
+    "anthropic_compatible": "Another service (Claude format)",
+}
+
+
 @dataclass(frozen=True, slots=True)
 class VisualAnalysisSettings:
     enabled: bool = False
