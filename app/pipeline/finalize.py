@@ -40,6 +40,15 @@ class FinalizeResult:
     warnings: list[str] = field(default_factory=list)
 
 
+def job_folder_name(connection: sqlite3.Connection, job_id: str) -> str:
+    """The folder holding this job's output, by name where one was recorded."""
+    row = connection.execute("SELECT output_dirname FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    if row is None:
+        return job_id
+    recorded = row["output_dirname"]
+    return str(recorded) if recorded else job_id
+
+
 def collect_sources(
     connection: sqlite3.Connection, job_id: str, output_root: Path
 ) -> list[tuple[sqlite3.Row, Path]]:
@@ -68,7 +77,13 @@ def finalize_job(
     """Write the job-level outputs. Safe to run more than once."""
     result = FinalizeResult()
     output_root = Path(output_root)
-    job_dir = output_root / job_id
+    # The folder the job's own output already lives in. Building this from the
+    # identifier put the job-level package — the analysis_input folder and the
+    # provenance file — in a *different* directory from the per-video output it
+    # describes, splitting one job across two folders. Read from the row for the
+    # same reason the worker does: NULL means an older job whose folder really is
+    # named with its identifier.
+    job_dir = output_root / job_folder_name(connection, job_id)
     sources = collect_sources(connection, job_id, output_root)
     result.video_count = len(sources)
 

@@ -43,6 +43,15 @@ from app.worker.reconcile import reconcile
 logger = get_logger(__name__)
 
 
+def _job_folder(job: sqlite3.Row) -> str:
+    """The folder a job's output belongs in, by name where one was recorded."""
+    try:
+        recorded = job["output_dirname"]
+    except (IndexError, KeyError):
+        return str(job["id"])
+    return str(recorded) if recorded else str(job["id"])
+
+
 class Worker:
     def __init__(self, settings: Settings, connection: sqlite3.Connection, worker_id: str):
         self.settings = settings
@@ -220,7 +229,12 @@ class Worker:
         """Run stages 1 and 2 for one video. False when it could not finish."""
         settings = self.settings_for(job)
         interval_ms = job["frame_interval_ms"] or settings.sampling.interval_ms()
-        output_dir = self.output_root / job["id"] / f"{video['id']}_v{video['version']}"
+        # NULL for every job created before folders were named, which is why
+        # the fallback is the identifier rather than a slug computed now:
+        # recomputing would point at a folder that does not hold the job's
+        # existing output.
+        folder = _job_folder(job)
+        output_dir = self.output_root / folder / f"{video['id']}_v{video['version']}"
 
         context = StageContext(
             connection=self.connection,

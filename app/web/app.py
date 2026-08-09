@@ -91,6 +91,20 @@ def _with_entry(existing: dict[str, str], key: str, value: str) -> dict[str, str
     return updated
 
 
+def job_folder(job: sqlite3.Row | dict[str, Any]) -> str:
+    """The folder holding a job's output, by name where one was recorded.
+
+    NULL for every job created before folders were named, so the fallback is the
+    identifier — not a slug recomputed from the current name, which would point
+    at a folder that does not hold that job's existing output.
+    """
+    try:
+        recorded = job["output_dirname"]
+    except (IndexError, KeyError, TypeError):
+        recorded = None
+    return str(recorded) if recorded else str(job["id"])
+
+
 def whole_number(raw: str, fallback: int = 0) -> int:
     """A query parameter read as an integer, never as a validation error.
 
@@ -438,8 +452,11 @@ def create_app(settings: Settings) -> FastAPI:
 
     def counts(connection: sqlite3.Connection | None) -> dict[str, str]:
         if connection is None:
-            return {"jobs": "", "collections": "", "imports": ""}
+            return {"jobs": "", "collections": "", "imports": "", "finished": ""}
         jobs = connection.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+        finished = connection.execute(
+            "SELECT COUNT(*) FROM jobs WHERE status IN ('completed', 'completed_with_gaps')"
+        ).fetchone()[0]
         collections = connection.execute("SELECT COUNT(*) FROM collections").fetchone()[0]
         imports = connection.execute(
             "SELECT COUNT(*) FROM job_videos WHERE imported_from IS NOT NULL"
@@ -449,16 +466,30 @@ def create_app(settings: Settings) -> FastAPI:
             "jobs": str(jobs) if jobs else "",
             "collections": str(collections) if collections else "",
             "imports": str(imports) if imports else "",
+            "finished": str(finished) if finished else "",
         }
 
-    def nav(screen: str, connection: sqlite3.Connection | None) -> list[NavGroup]:
+    def nav(
+        screen: str, connection: sqlite3.Connection | None, *, state: str = ""
+    ) -> list[NavGroup]:
         found = counts(connection)
         return [
             NavGroup(
                 "Videos",
                 [
-                    NavItem("Dashboard", "/", found["jobs"], screen == "dashboard"),
+                    NavItem("Dashboard", "/", found["jobs"], screen == "dashboard" and not state),
                     NavItem("New job", "/jobs/new", "", screen == "newjob"),
+                    # The dashboard has always been able to filter to finished
+                    # work; nothing pointed at it. A job that has completed drops
+                    # out of sight among everything else, and the only route back
+                    # was to remember it and scroll — on the screen a user is
+                    # most likely to want after leaving a long job running.
+                    NavItem(
+                        "Finished",
+                        "/?state=finished",
+                        found["finished"],
+                        screen == "dashboard" and state == "finished",
+                    ),
                     NavItem(
                         "Bring in earlier work",
                         "/imports",
@@ -489,7 +520,12 @@ def create_app(settings: Settings) -> FastAPI:
         ]
 
     def page(
-        request: Request, template: str, screen: str, status_code: int = 200, **context: Any
+        request: Request,
+        template: str,
+        screen: str,
+        status_code: int = 200,
+        nav_state: str = "",
+        **context: Any,
     ) -> HTMLResponse:
         connection = connect()
         try:
@@ -506,7 +542,7 @@ def create_app(settings: Settings) -> FastAPI:
                 # not, so an updated application serves new screens from old
                 # code — and every symptom of that looks like an ordinary bug.
                 "restart_needed": current_fingerprint() > loaded_fingerprint,
-                "nav_groups": nav(screen, connection),
+                "nav_groups": nav(screen, connection, state=nav_state),
                 "worker": worker_state(connection),
                 "disk_label": disk_label(),
                 "settings": current(),
@@ -614,6 +650,7 @@ def create_app(settings: Settings) -> FastAPI:
             request,
             "dashboard.html",
             "dashboard",
+            nav_state=state,
             jobs=jobs,
             active=active,
             q=q,
@@ -729,7 +766,7 @@ def create_app(settings: Settings) -> FastAPI:
         if root is not None:
             from app.web.files import directory_size
 
-            job_dir = Path(root) / job_id
+            job_dir = Path(root) / job_folder(job)
             if job_dir.is_dir():
                 total_bytes, _ = directory_size(job_dir)
                 total_size = status_module.format_bytes(total_bytes)
@@ -1022,6 +1059,8 @@ def create_app(settings: Settings) -> FastAPI:
 
         connection = connect()
         files: list[dict[str, Any]] = []
+        reclaimable: list[dict[str, Any]] = []
+        busy = ""
         total_bytes = 0
         root = current().output_root
 
@@ -1059,6 +1098,19 @@ def create_app(settings: Settings) -> FastAPI:
                             in {".txt", ".md", ".json", ".jpg", ".jpeg", ".png"},
                         }
                     )
+
+                busy = in_flight_reason(connection, job_id)
+                reclaimable = [
+                    {
+                        "key": group.key,
+                        "label": group.label,
+                        "consequence": group.consequence,
+                        "remakeable": group.remakeable,
+                        "size": status_module.format_bytes(group.total_bytes),
+                    }
+                    for group in _reclaimable_groups(connection, job_id, root)
+                    if group.present
+                ]
         finally:
             if connection is not None:
                 connection.close()
@@ -1069,8 +1121,89 @@ def create_app(settings: Settings) -> FastAPI:
             "dashboard",
             job_id=job_id,
             files=files,
+            reclaimable=reclaimable,
+            reclaim_blocked=busy,
             total_size=status_module.format_bytes(total_bytes),
         )
+
+    def _video_dirs(connection: sqlite3.Connection, job_id: str, root: Any) -> list[Path]:
+        """Every version's folder for a job, active or not.
+
+        Not only the active version: an earlier version's pictures take exactly
+        as much disk as the current one's, and a cleanup screen that silently
+        skipped them would report less space than it could actually free.
+        """
+        if root is None:
+            return []
+        rows = connection.execute(
+            "SELECT output_dir FROM job_videos WHERE job_id = ?", (job_id,)
+        ).fetchall()
+        return [Path(root) / row["output_dir"] for row in rows if row["output_dir"]]
+
+    def _reclaimable_groups(connection: sqlite3.Connection, job_id: str, root: Any) -> list[Any]:
+        from app.services.cleanup import removable_groups
+
+        return removable_groups(_video_dirs(connection, job_id, root))
+
+    @app.post("/jobs/{job_id}/files/remove")
+    def remove_files_route(
+        request: Request, job_id: str, group: list[str] = Form(default=[])
+    ) -> Response:
+        """Remove the chosen kinds of file, keeping the rest.
+
+        Deleting a job used to be all-or-nothing. On a real job that made 91 MB
+        of scratch audio and 185 MB of pictures the same decision as the 1 MB
+        document the whole run exists to produce.
+        """
+        from app.services.cleanup import remove_groups
+
+        connection = connect()
+        if connection is None:
+            return RedirectResponse("/", status_code=303)
+
+        try:
+            job = connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            if job is None:
+                return page(request, "notfound.html", "dashboard", what="job", status_code=404)
+
+            busy = in_flight_reason(connection, job_id)
+            if busy:
+                return render_job(request, job_id, problems=[busy], status_code=409)
+
+            chosen = {name for name in group if name}
+            if not chosen:
+                return RedirectResponse(f"/jobs/{job_id}/outputs", status_code=303)
+
+            root = current().output_root
+            if root is None:
+                return RedirectResponse("/launch", status_code=303)
+            result = remove_groups(
+                _video_dirs(connection, job_id, root), chosen, output_root=Path(root)
+            )
+
+            if result.removed:
+                connection.execute(
+                    "INSERT INTO events (job_id, level, kind, message, created_at)"
+                    " VALUES (?,?,?,?,?)",
+                    (
+                        job_id,
+                        "info",
+                        "files_removed",
+                        f"Removed {', '.join(result.removed).lower()} to free "
+                        f"{status_module.format_bytes(result.freed_bytes)}. "
+                        "The job and everything else it produced are kept.",
+                        utc_now(),
+                    ),
+                )
+            for problem in result.problems:
+                connection.execute(
+                    "INSERT INTO events (job_id, level, kind, message, created_at)"
+                    " VALUES (?,?,?,?,?)",
+                    (job_id, "warning", "files_removed", problem, utc_now()),
+                )
+        finally:
+            connection.close()
+        return RedirectResponse(f"/jobs/{job_id}/outputs", status_code=303)
 
     # ── Actions ───────────────────────────────────────────────────────────
 
@@ -2488,7 +2621,7 @@ def create_app(settings: Settings) -> FastAPI:
             return RedirectResponse("/", status_code=303)
 
         try:
-            job = connection.execute("SELECT id FROM jobs WHERE id = ?", (job_id,)).fetchone()
+            job = connection.execute("SELECT * FROM jobs WHERE id = ?", (job_id,)).fetchone()
             if job is None:
                 return page(request, "notfound.html", "dashboard", what="job", status_code=404)
 
@@ -2517,7 +2650,7 @@ def create_app(settings: Settings) -> FastAPI:
 
             root = current().output_root
             if remove_files and root is not None:
-                job_dir = Path(root) / job_id
+                job_dir = Path(root) / job_folder(job)
                 try:
                     resolved = job_dir.resolve()
                     resolved.relative_to(Path(root).resolve())

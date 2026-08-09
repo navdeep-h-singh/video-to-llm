@@ -113,10 +113,20 @@ def create_job(
     job_id = new_id()
     resolved_interval = interval_ms or settings.sampling.interval_ms()
 
+    # Decided once, here, and never again. Deriving it from the name at write
+    # time would move the folder the moment a job is renamed, orphaning
+    # everything already produced — and a rename should stay as cheap as
+    # changing a label.
+    dirname = unique_dirname(
+        Path(settings.output_root) if settings.output_root else Path(),
+        slugify_dirname(name),
+        fallback=job_id,
+    )
+
     connection.execute(
         "INSERT INTO jobs (id, name, status, output_root, frame_interval_ms,"
         " visual_provider, visual_model_id, budget_limit_usd, budget_on_limit,"
-        " created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        " output_dirname, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         (
             job_id,
             name.strip(),
@@ -129,6 +139,7 @@ def create_job(
             if provider not in {"none", "ollama_local"}
             else None,
             settings.visual_analysis.budget.on_limit,
+            dirname,
             utc_now(),
             utc_now(),
         ),
@@ -254,3 +265,77 @@ def _record(
         "INSERT INTO events (job_id, level, kind, message, created_at) VALUES (?,?,?,?,?)",
         (job_id, level, kind, message, utc_now()),
     )
+
+
+# ── Where a job's files live ──────────────────────────────────────────────
+
+#: Names Windows refuses outright, whatever the extension. Checked on every
+#: platform: an output root on a shared drive, or a folder later copied to a
+#: Windows machine, should not be the moment this is discovered.
+RESERVED_DIRNAMES = frozenset(
+    {"con", "prn", "aux", "nul"}
+    | {f"com{n}" for n in range(1, 10)}
+    | {f"lpt{n}" for n in range(1, 10)}
+)
+
+#: Long enough to stay recognisable, short enough that the full path to a frame
+#: inside it clears Windows' 260-character limit with room to spare.
+MAX_DIRNAME_LENGTH = 60
+
+
+def slugify_dirname(name: str) -> str:
+    """A folder name derived from a job name, safe on every platform.
+
+    Deliberately conservative. The set of characters that are legal in a path is
+    much larger than the set that behaves predictably in a shell, a zip file, a
+    backup tool, and three filesystems — and this name is going to be handled by
+    all of those. Letters, digits, dash and underscore only.
+
+    Returns an empty string when nothing usable survives, which the caller reads
+    as "fall back to the identifier" rather than inventing a name.
+    """
+    import unicodedata
+
+    # Decompose so accented Latin letters keep their base form rather than
+    # vanishing: "Sesión" should become "sesion", not "sesin".
+    decomposed = unicodedata.normalize("NFKD", name)
+    kept = []
+    for character in decomposed:
+        if unicodedata.combining(character):
+            continue
+        if character.isascii() and (character.isalnum() or character in "-_"):
+            kept.append(character)
+        elif character.isspace() or character in "-_.":
+            kept.append("-")
+        # Anything else — punctuation, emoji, a path separator — is dropped.
+
+    slug = "".join(kept).strip("-_.").lower()
+    while "--" in slug:
+        slug = slug.replace("--", "-")
+
+    slug = slug[:MAX_DIRNAME_LENGTH].strip("-_.")
+
+    if not slug or slug in RESERVED_DIRNAMES:
+        return ""
+    return slug
+
+
+def unique_dirname(root: Path, wanted: str, *, fallback: str) -> str:
+    """*wanted*, or *wanted* with a suffix, or *fallback* if it is unusable.
+
+    Two jobs may reasonably share a name — "Tuesday review" happens twice — and
+    the second must not be written into the first one's folder. The suffix
+    counts up rather than using the identifier, so the common case stays
+    readable and only a genuine clash pays for itself.
+    """
+    if not wanted:
+        return fallback
+
+    candidate = wanted
+    for attempt in range(2, 100):
+        if not (root / candidate).exists():
+            return candidate
+        candidate = f"{wanted}-{attempt}"
+
+    # A hundred folders of the same name is not a naming problem any more.
+    return fallback

@@ -64,4 +64,58 @@
     {{ empty("No files yet.", "They appear here as the job produces them.") }}
   {% endif %}
 </div>
+
+{#
+  Free up space, by kind rather than all-or-nothing.
+
+  Removing a job offered two choices: keep every file or remove the folder. On a
+  real job that made the 91 MB of scratch audio and the 1 MB document the run
+  exists to produce into the same decision. Each kind therefore says what losing
+  it actually costs — the sizes alone point the wrong way, because the largest
+  folder is the cheapest to rebuild and the smallest may be hours of work.
+
+  Nothing is ticked by default, and the assembled document is not offered at all.
+#}
+{% set groups = reclaimable | default([], true) %}
+{% if groups %}
+<div class="panel">
+  <div class="panel-head"><h4 style="margin:0">Free up space</h4></div>
+
+  {% if reclaim_blocked %}
+    <p class="note" role="alert" style="margin:0">{{ reclaim_blocked }}</p>
+  {% else %}
+  <p style="font-size:14px">
+    Choose what to remove. The job itself is kept, along with everything you do
+    not tick here.
+  </p>
+  <form method="post" action="/jobs/{{ job_id }}/files/remove">
+    <table class="table">
+      <caption class="visually-hidden">Files that can be removed</caption>
+      <thead><tr>
+        <th scope="col"><span class="visually-hidden">Remove</span></th>
+        <th scope="col">What</th><th scope="col">Size</th><th scope="col">If you remove it</th>
+      </tr></thead>
+      <tbody>
+        {% for group in groups %}
+        <tr>
+          <td><input type="checkbox" name="group" value="{{ group.key }}"
+                     id="group-{{ group.key }}"></td>
+          <td><label for="group-{{ group.key }}">{{ group.label }}</label></td>
+          <td class="mono">{{ group.size }}</td>
+          <td style="font-size:13px">
+            {{ group.consequence }}
+            {% if not group.remakeable %}
+              <strong>This computer cannot make it again on its own.</strong>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    <button class="btn btn-secondary" type="submit"
+            data-busy-label="Removing…">Remove what is ticked</button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
 {% endblock %}
