@@ -35,8 +35,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.collections.tokens import CHARS_PER_TOKEN, estimate_tokens  # noqa: E402
-from app.core.config import load_settings  # noqa: E402
+from app.collections.tokens import CHARS_PER_TOKEN, estimate_tokens
+from app.core.config import load_settings
 
 #: Gemini-style native video: one frame per second plus an audio track. Both
 #: figures are Google's published rates for their own encoding, and they are
@@ -165,7 +165,7 @@ def render(measurements: list[Measurement]) -> str:
         lines.append("-" * 94)
         lines.append(
             f"n={len(measurements)}  median saving vs frames {median:.0%}  "
-            f"range {savings[0]:.0%}–{savings[-1]:.0%}"
+            f"range {savings[0]:.0%} to {savings[-1]:.0%}"
         )
         lines.append("")
         lines.append("The 'native' column samples 1 fps; this app sampled every")
@@ -203,7 +203,7 @@ def main() -> int:
                     describe=args.describe,
                 )
             )
-        except Exception as error:  # noqa: BLE001 - a measurement tool, keep going
+        except Exception as error:
             print(f"  failed: {error}", file=sys.stderr)
 
     if not measurements:
