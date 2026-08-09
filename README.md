@@ -1,154 +1,246 @@
-# Video → LLM
+<h1 align="center">Video → LLM</h1>
 
-Turn local video files into timestamped, reviewable, reusable evidence — then
-combine independently processed videos into ordered, LLM-ready **Collections**.
+<p align="center">
+  <strong>Turn hours of local video into one timestamped, citable document
+  your LLM can actually read.</strong><br>
+  Process once. Ask forever. Nothing leaves your machine.
+</p>
 
-Everything runs on your own computer. The interface is served on the loopback
-interface only. Your source videos are never copied, never moved, and never
-uploaded.
-
----
-
-## What it does
-
-For each video you give it, the pipeline produces:
-
-- **Clean sampled frames** at a fixed interval you choose (½ – 10 seconds), plus
-  a separate set of small numbered copies used only for alignment when an
-  optional description model is involved.
-- **A local transcript** with the original timeline preserved and stretches of
-  quiet marked explicitly.
-- **Optional structured visual descriptions** of each frame — off by default,
-  and never required.
-- **`assembled.txt`** — the transcript, the quiet stretches, the descriptions and
-  the section markers woven together in chronological order.
-- **Manifests and provenance** recording exactly what produced the output, with
-  which settings, and when.
-- **An `analysis_input` folder** ready to hand to whatever you use next.
-
-Later, a **Collection** takes several already-processed videos, puts them in an
-order you set explicitly, and assembles them — either as one long document or as
-numbered parts sized to fit a context window. Building a collection re-uses the
-existing output; it never re-extracts frames, re-transcribes audio, or re-runs
-visual analysis.
-
-## What it is not
-
-Not a cloud product, a chatbot, a video editor, a remote-access system, a
-reasoning engine, or an automated decision system. There are no accounts, no
-telemetry, no uploads, and nothing to sign in to.
+<p align="center">
+  <img src="https://img.shields.io/badge/python-3.11%20|%203.12%20|%203.13-blue" alt="Python 3.11 to 3.13">
+  <img src="https://img.shields.io/badge/tests-1%2C421-brightgreen" alt="1,421 tests">
+  <img src="https://img.shields.io/badge/network-not%20required-ec3013" alt="Runs offline">
+  <img src="https://img.shields.io/badge/licence-MIT-lightgrey" alt="MIT licence">
+</p>
 
 ---
+
+Your LLM cannot watch a forty-hour course. Uploading it is slow, often
+expensive, and frequently not allowed. Extracting the frames yourself costs
+millions of tokens and throws away the audio.
+
+`video-to-llm` turns each video into **one chronological document** — speech,
+marked silences, section headings, and optionally what was on screen — all in
+the order it happened, every line carrying a timestamp that resolves back to the
+exact frame it came from.
+
+Do it once. Ask as many questions as you like, of as many models as you like,
+for as long as you keep the folder.
+
+## Quickstart
+
+```bash
+uvx video-to-llm process lecture.mp4
+```
+
+> **Not on PyPI yet.** Until the first release lands, clone the repository and
+> run `uv sync`, then `uv run video-to-llm process lecture.mp4`.
+
+You need [FFmpeg](https://ffmpeg.org) on your `PATH`. The first run downloads a
+speech-to-text model (about 2 GB) and then never touches the network again.
+
+```bash
+video-to-llm doctor          # check this machine is ready
+```
+
+## What you get
+
+This is the actual output — real lines from a real 49-minute recording, in the
+default configuration:
+
+```
+00:01:30  [nobody speaking · 11 seconds]
+00:01:40  Yep, just so that you know, the first thing you'll do is you'll take everything out of
+00:01:48  your chart.
+00:01:49  When you're going to analyze the chart.
+00:01:54  [nobody speaking · 4 seconds]
+00:01:58  I think all of you know what trends are, right?
+00:02:01  You're either going up or you're either coming down. Very simple, right?
+00:02:05  But when you look at trends in terms of structure, what we are looking for is the basic.
+```
+
+That is the whole artifact: plain text, chronological, timestamped to the
+source, and yours. Hand it to any model. Grep it. Keep it for a decade.
+
+### Check any line
+
+Every timestamp resolves back to the picture behind it:
+
+```bash
+video-to-llm show lecture 00:02:05
+```
+
+```
+lecture.mp4 — 00:02:05
+in job 'lecture'
+
+  00:02:01  You're either going up or you're either coming down. Very simple, right?
+> 00:02:05  But when you look at trends in terms of structure, what we are looking for is the basic.
+
+Picture: ~/VideoToLLM/lecture/…/frames/000062_t000124.jpg
+```
+
+A claim your model makes is only evidence if you can check it. This is how.
+
+## How it compares
+
+Honest in both directions — including where this is the wrong tool.
+
+| | video-to-llm | Clip tools (`/watch`, `claude-real-video`) | Upload the video |
+|---|---|---|---|
+| Video length | Hours. Tested on 49 min / 1,488 frames and a 15 h course | Minutes; frame caps around 150 | Minutes to an hour, at cost |
+| Asking a second question | Free and instant — reuses the document | Re-downloads and re-processes | Re-uploads or re-pays |
+| Survives a crash mid-job | Yes, resumes the exact stage | No | n/a |
+| Many videos, one ordered document | Yes | No | No |
+| Leaves your machine | Never, unless you opt in per job | Audio usually via a cloud API | Entirely |
+| Cost control | Cap checked before each request | None | Pay per call |
+| Cite a claim back to a frame | Yes | No | No |
+| **Setup time** | **Minutes: FFmpeg and a 2 GB model** | **Seconds** | **Seconds** |
+| **One quick clip** | **Overkill — use something else** | **Ideal** | **Ideal** |
+
+## Using it
+
+### From the command line
+
+```bash
+video-to-llm process lecture.mp4                      # one video
+video-to-llm process w1.mp4 w2.mp4 --name "Course"    # several, in your order
+video-to-llm process talk.mp4 --interval 5            # fewer pictures, faster
+video-to-llm process demo.mp4 --describe local        # add screen descriptions
+video-to-llm process talk.mp4 --format jsonl          # also emit structured data
+video-to-llm show "Course" 01:12:30                   # resolve a citation
+video-to-llm export "Course" --format srt             # subtitles, no reprocessing
+video-to-llm status                                   # what is done, what is running
+```
+
+### From an agent
+
+```bash
+video-to-llm mcp        # MCP server on stdio; needs the [mcp] extra
+```
+
+Four tools — `process_video`, `list_videos`, `get_transcript`, `get_segment`.
+`process_video` is idempotent: asked for a video it has already done, it returns
+the existing document instead of doing the work again. That is the whole point.
+Process a forty-hour course once; every question after that is instant, offline,
+and free.
+
+An agent cannot choose a paid description service through these tools. That
+decision belongs on the settings screen, where the estimate and the spending cap
+are visible.
+
+For Claude Code, the plugin registers both the skill and the MCP server.
+
+### From the browser
+
+```bash
+video-to-llm start
+```
+
+An interface on `127.0.0.1` with live progress, a frame reviewer, job control,
+and the collection builder. Closing the browser does not stop a job.
+
+## Collections
+
+Several already-processed videos, in an order you set explicitly, assembled into
+one document or into numbered parts sized to fit a context window. Building a
+collection **re-uses existing output** — it never re-extracts a frame,
+re-transcribes audio, or re-runs a description.
+
+Order is never inferred from filename, date, or content. Two recordings from the
+same morning have no inherent sequence, so you say what it is.
+
+## Privacy, as mechanism
+
+Not a promise — a set of properties with tests that fail when they regress.
+
+- The interface binds `127.0.0.1`, asserted at application construction.
+- One middleware refuses a foreign `Host` and a foreign origin on every write.
+- No page loads an off-origin resource. No CDN, no web font, no analytics.
+- Your source videos are never copied, never moved, never uploaded.
+- Keys live in the OS keychain — macOS Keychain, Windows Credential Manager,
+  Linux Secret Service. **No plaintext fallback is ever created**, and a stored
+  key is never rendered back to you, not even a prefix.
+- There are no accounts, no telemetry, and nothing to sign in to.
+- Descriptions are off by default. A job that leaves them off makes no network
+  request at all.
+- Local never silently falls back to cloud.
+
+## Optional: screen descriptions
+
+Off by default. When you turn them on you choose between your own
+[Ollama](https://ollama.com) model — frames stay on the device, no charge — and
+a service (Claude, Gemini, OpenAI, or any OpenAI- or Anthropic-compatible
+endpoint), which receives **only the numbered still pictures**, never the video
+and never the audio. You see what will be sent and roughly what it costs before
+anything leaves, and processing stops at a cap you set.
 
 ## Requirements
 
-- **Python 3.11** and [`uv`](https://docs.astral.sh/uv/)
-- **FFmpeg** (with `ffprobe`) on your `PATH`
-- Roughly 2 GB of disk for the speech-to-text model, plus room for the frames
-  you extract — a 2-hour video at one picture every 2 seconds is about 2 GB.
+- Python 3.11, 3.12, or 3.13
+- FFmpeg with `ffprobe` on your `PATH`
+- ~2 GB for the speech model, plus room for frames — a 2-hour video at one
+  picture every 2 seconds is roughly 2 GB
 
-A GPU is optional everywhere. Transcription runs on the CPU on every supported
-platform. macOS, Windows, and Linux are supported equally.
+A GPU is optional everywhere. Transcription runs on CPU on every platform.
 
-## Setup
-
-```bash
-uv sync
-```
-
-Platform helper scripts live in `scripts/` (`setup_macos.sh`,
-`setup_windows.ps1`, `setup_linux.sh`). They check your environment and tell you
-what is missing — they are not installers, and they do not modify your system
-without asking.
-
-Verify the result:
+### Other ways to install
 
 ```bash
-uv run video-to-llm doctor
+uv tool install video-to-llm            # or: pipx install video-to-llm
+uv sync                                 # from a clone
+docker build -t video-to-llm .          # command line only, see the Dockerfile
 ```
 
-## Running
+## Known limitations
 
-```bash
-uv run video-to-llm start
-```
+Carried here deliberately rather than left for you to discover.
 
-This starts the local interface and the background worker together, then prints
-the address to open. The worker is independent: **closing the browser does not
-stop a job**, and a job resumes safely after a restart or a sleep.
-
-To run the two separately:
-
-```bash
-uv run video-to-llm start-ui
-uv run video-to-llm run-worker
-```
-
-Other commands:
-
-| Command | What it does |
-|---|---|
-| `doctor` | Checks FFmpeg, transcription, output root, disk, and worker state |
-| `status` | Prints current jobs, stages, and worker health |
-| `smoke-test` | End-to-end run on generated synthetic media, no network |
-| `import <path>` | Brings previously processed output back under management |
-
-The whole pipeline is callable from the command line without ever opening the
-interface.
-
----
-
-## Optional: visual descriptions
-
-Off by default. A job that never turns this on produces frames, a transcript, and
-an assembled document without any network access at all.
-
-When you do turn it on, you choose between:
-
-**On this computer** — a vision model you have installed yourself, through
-[Ollama](https://ollama.com). Frames stay on this device and there is no provider
-charge; local compute, battery, heat, memory, and time apply instead. The
-application never installs, starts, updates, or bundles Ollama — that stays
-entirely under your control. Only loopback endpoints (`127.0.0.1`, `localhost`,
-`::1`) are accepted.
-
-> Local models are less reliable for tiny text, dense labels, exact values, and
-> strict structured extraction. Review low-confidence results.
-
-**Send to a service** — Anthropic Claude, Google Gemini, OpenAI, or any
-OpenAI-compatible endpoint. Only the numbered still pictures are sent, never your
-video and never its audio. You see what will be sent and roughly what it costs
-before anything leaves the machine, and processing stops at a spending cap you
-set. Model identifiers are free text; there is no fixed catalogue.
-
-There is never an automatic fall back from a local model to a cloud one.
-
-## Where your keys live
-
-In your operating system's secure store — macOS Keychain, Windows Credential
-Manager, or a Linux Secret Service keyring. Where no secure store exists, a
-process-scoped environment variable is accepted instead. **No plaintext fallback
-is ever created**, and a stored key is never displayed back to you, written into
-the database, the logs, a manifest, an artifact, an export, or a collection.
-
----
+- **Screen descriptions are beta.** They work — on a 49-minute chart recording
+  the model read the right instrument, the right timeframe, and real values off
+  the screen — but their *accuracy* is unmeasured, and the structured fields are
+  still written for one domain (trading charts). On other content those fields
+  come back `Unknown` rather than wrong, but they are wasted. See
+  [`docs/DESCRIPTION_QUALITY.md`](docs/DESCRIPTION_QUALITY.md), which includes
+  the experiment and the plan.
+- **Transcription accuracy is unmeasured**, and Whisper sometimes writes a line
+  over silence — a transcript opening with "Thanks for watching!" is the model,
+  not your video.
+- **Local descriptions are slow**: roughly 31 s/picture on an Apple Silicon Mac,
+  measured over 1,488 of them. Use a coarser `--interval`, or a service with a cap.
+- **No cloud provider has been exercised against a live service.** Five adapters
+  are verified against documented request and response shapes; local Ollama is
+  verified live against 0.32.6 with `qwen2.5vl:7b`.
+- **Windows and Linux have never executed this code.** Development was entirely
+  on macOS (Apple Silicon). The CI matrix covers all three operating systems and
+  all three Python versions, but it has not run yet — there is no remote. Paths,
+  keyring backends, symlink and hard-link fallbacks are written defensively and
+  unit-tested, and nothing more than that should be assumed.
+- **The container ships the command line, not the interface** — the interface
+  binds loopback, which inside a container is unreachable from the host.
+- **No URL downloading.** Local files only. Fetch it yourself first.
+- **The event log grows without bound.**
 
 ## Documentation
 
 | Document | Covers |
 |---|---|
-| `docs/DECISIONS.md` | Choices made at build time and why |
-| `docs/LOCAL_SETUP.md` | Per-platform setup detail |
-| `docs/PIPELINE_CONTRACT.md` | Stage inputs, outputs, and guarantees |
-| `docs/LOCAL_OLLAMA.md` | Running descriptions on this computer |
-| `docs/COLLECTIONS.md` | Building collections and context packs |
-| `docs/OPERATIONS.md` | Running, pausing, monitoring |
-| `docs/RECOVERY.md` | What happens after a crash, a sleep, or a cancel |
-| `docs/IMPORT_EXPORT.md` | Bringing earlier work in, taking output out |
-| `docs/SECURITY.md` | Secret handling and the localhost boundary |
-| `docs/UX_NOTES.md` | How the supplied design maps onto the implementation |
-| `docs/SECURE_GITHUB_EXPORT.md` | Publishing this repository safely |
+| [`docs/DESCRIPTION_QUALITY.md`](docs/DESCRIPTION_QUALITY.md) | What the description model actually produces, and what it does not |
+| [`docs/PIPELINE_CONTRACT.md`](docs/PIPELINE_CONTRACT.md) | Stage inputs, outputs, guarantees |
+| [`docs/COLLECTIONS.md`](docs/COLLECTIONS.md) | Collections and context packs |
+| [`docs/SECURITY.md`](docs/SECURITY.md) | Secret handling and the localhost boundary |
+| [`docs/LOCAL_OLLAMA.md`](docs/LOCAL_OLLAMA.md) | Running descriptions on this computer |
+| [`docs/RECOVERY.md`](docs/RECOVERY.md) | After a crash, a sleep, or a cancel |
+| [`docs/OPERATIONS.md`](docs/OPERATIONS.md) | Running, pausing, monitoring |
+| [`docs/IMPORT_EXPORT.md`](docs/IMPORT_EXPORT.md) | Bringing earlier work in, taking output out |
+| [`docs/LOCAL_SETUP.md`](docs/LOCAL_SETUP.md) | Per-platform setup |
+| [`docs/DECISIONS.md`](docs/DECISIONS.md) | Choices made at build time, and why |
+
+## Contributing
+
+Bug reports from real use are worth more than anything else right now,
+especially on Windows and Linux. See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Licence
 
-MIT.
+MIT. See [`LICENSE`](LICENSE).
