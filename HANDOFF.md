@@ -2,10 +2,14 @@
 
 **For:** a fresh session with full context.
 **Repo:** `~/My Builds/Video Processor for LLMs`
-**State:** 1,371 tests passing · ruff, mypy, audit and smoke all clean · working
-tree clean · nothing half-built. Confirm with `git log --oneline -1` and the
-commands in §2 — this file deliberately carries no hash of its own commit,
-because writing one changes it.
+**State:** 1,440 tests passing · ruff, mypy, audit and smoke all clean · nothing
+half-built. Confirm with `git log --oneline -1` and the commands in §2 — this
+file deliberately carries no hash of its own commit, because writing one changes
+it.
+
+**Session four's work is on the `launch-prep` branch, not `main`.** It is a
+clean fast-forward. See §5H for what it contains and
+`docs/LAUNCH_CHECKLIST.md` for what it deliberately left undone.
 
 ---
 
@@ -75,6 +79,19 @@ uv run pytest -q --deselect tests/integration/test_live_ollama.py
 uv run ruff format --check . && uv run ruff check . && uv run mypy app
 uv run python scripts/pre_publish_audit.py
 ```
+
+**The pipeline no longer needs the browser.** Since session four:
+
+```bash
+uv run video-to-llm process video.mp4 --interval 2 --format jsonl
+uv run video-to-llm show "job name" 00:12:34   # → transcript + the frame's path
+uv run video-to-llm export "job name" --format srt
+uv run video-to-llm mcp                        # stdio MCP server, needs [mcp]
+```
+
+Note the gate above: **run each check as its own command, not through a pipe.**
+`uv run ruff check . | tail -1` reports `tail`'s exit status, and a commit was
+made against three unfixed findings that way in session four.
 
 A throwaway instance that cannot touch the real settings or output:
 
@@ -269,6 +286,39 @@ amount a model has to read. See §10 for the arithmetic behind that claim.
 
 ---
 
+### H. Session four — the launch build (`8c683c6` onward)
+
+A competitive scan of the GitHub category, then the work it implied. The scan is
+in `docs/GITHUB_LAUNCH_PLAN.md`; what could not be done from a laptop is in
+`docs/LAUNCH_CHECKLIST.md`.
+
+- **The schema shipped outside the package.** `migrations_dir()` resolved to
+  `repo_root() / "migrations"`, which from `site-packages/app/core/config.py`
+  points at `site-packages/migrations`. **A pip-installed copy could not create
+  its own database.** Every test passed because every test ran from the
+  checkout, and the tool had never once been installed from a wheel. Now
+  `app/migrations/`, resolved against the package, with a CI job that installs
+  the built artifact and runs it from `/tmp`.
+- **Python was pinned to 3.11 only**, so every install from a 3.12 or 3.13
+  machine — the default on current Homebrew and Ubuntu — failed at resolution.
+  Now `>=3.11,<3.14`, verified by installing and importing faster-whisper and
+  ctranslate2 on 3.13 before widening rather than after.
+- **There was no LICENSE file**, though the README and the metadata had claimed
+  MIT since the first commit.
+- **`process`, `show`, `export`, `mcp`.** The README's claim that the pipeline
+  was callable from the command line is finally true. `show` resolves a
+  timestamp to the surrounding transcript and the exact frame's path, which is
+  what makes "reviewable evidence" a demonstrable thing rather than an adjective.
+- **A one-shot worker took the oldest ready job**, so `process foo.mp4` on a
+  machine with anything queued ran something else — and, where that job named a
+  cloud service, spent money doing it. The worker can be scoped to one job now.
+- **Four MCP tools**, with `process_video` idempotent on the source paths, and a
+  refusal to let an agent select a paid provider.
+- **The confidence prompt.** See §7 and `docs/DESCRIPTION_QUALITY.md`.
+- **Guards on the documentation itself**: every command in the README and in
+  `SKILL.md` must parse, `--format` choices must match the exporters, and four
+  claims are held under embargo until they are earned.
+
 ## 6. The bug classes this build keeps producing
 
 **Controls wired to nothing** was session two's class and still applies. Session
@@ -309,6 +359,21 @@ set" on an unrelated screen.
 
 **Assert that the thing under test actually happened before asserting about it.**
 
+### The checkout hides packaging bugs
+
+Everything resolves relative to the repository when you run from a source tree,
+so a file that never made it into the wheel is still found. `migrations_dir()`
+pointed outside the package for four sessions and 1,371 green tests. **A source
+tree cannot catch this class at all** — only building the artifact, installing
+it somewhere else, and running it there can. CI does that now.
+
+### The documentation is not covered by the tests unless you cover it
+
+The README promised a command that did not exist for three sessions. A skill
+file is worse: an agent executes it literally, so a wrong command becomes a loop
+of failing shell calls on a stranger's machine. Both are now parsed and checked
+against the real parser.
+
 ### The one that keeps costing hours
 
 **Templates reload from disk; route code does not.** Three incidents this
@@ -332,19 +397,34 @@ hours of description work. §5E is the mitigation, not a cure.
 | A job's output stays in one folder | `test_job_files.py` |
 | No screen has markup in its `<title>` | `test_accessibility.py` |
 | Every screen renders with no videos / no artifacts / empty install | `test_web_ui.py` |
+| The schema is inside the installed package | `test_db.py` |
+| Every documented CLI command actually parses | `test_headless_cli.py` |
+| A `--format` choice matches an exporter that exists | `test_headless_cli.py` |
+| A citation resolves to a video, not to `analysis_input/` | `test_headless_cli.py` |
+| Exports never parse the rendered document | `test_headless_cli.py` |
+| An agent cannot select a paid provider | `test_mcp_tools.py` |
+| Processing the same files twice reuses the finished job | `test_mcp_tools.py` |
+| Every command the skill names exists | `test_skill_and_plugin.py` |
+| Every command the README shows parses | `test_readme_claims.py` |
+| The README makes no claim that is not yet earned | `test_readme_claims.py` |
+| The prompt defines what `confidence` measures | `test_visual_prompt.py` |
 
 ---
 
 ## 7. Known limitations — carry these forward honestly
 
-- **The descriptions on the one real run were worthless.** All 1,479 came back
-  `confidence: Low` — zero Medium, zero High — and the structured fields
-  disagree with themselves across consecutive frames of the same chart. On that
-  video the entire signal was in the 53 KB transcript. This is the single most
-  important open question in the product: the headline feature produced nothing
-  usable on its first real workload. Investigate before marketing descriptions,
-  and before assuming the local model choice or the prompt is sound.
+- ~~**The descriptions on the one real run were worthless.**~~ **Answered — see
+  `docs/DESCRIPTION_QUALITY.md`.** They were not. The content was largely correct
+  (right instrument, right timeframe, real values read off the screen); only
+  `confidence` was useless, and only because the prompt defined it as a feeling
+  — "Set confidence to Low whenever you are unsure", which a careful model
+  satisfies by answering Low every time. A legibility rubric moved the same five
+  sampled frames to four Medium and one High. Still open: **accuracy is
+  unmeasured**, and the schema is written for forex charts, which is a design
+  change with a migration attached and is not yet made.
 - **CI has never executed.** No git remote, so GitHub Actions has never run.
+  The matrix is now nine cells (3 OS × 3 Python) plus an installed-wheel job and
+  a container build, none of which has run either.
   **Windows and Linux are untested.** Everything was built on macOS (Apple
   Silicon). Platform-specific paths — symlink fallback, directory fsync, keyring
   backends, the hard-link fallback in reruns, the new folder-name slug — are
@@ -374,19 +454,30 @@ hours of description work. §5E is the mitigation, not a cure.
 
 ## 8. Where to pick up
 
-Roughly in order of value:
+`docs/LAUNCH_CHECKLIST.md` is the full list, sequenced. The short version, in
+order of value:
 
-1. **Find out why every description came back Low confidence.** §7, first bullet.
-   Prompt, schema, model choice, or image quality — it is not yet known which,
-   and everything downstream of "describe the pictures" depends on the answer.
-2. **Get a git remote and let CI run.** Windows and Linux have never executed a
-   line of this, and the folder-name slug is new platform-specific surface.
+1. **Get a git remote and let CI run.** Still the highest-value thing nobody can
+   do from a laptop. Nine test cells, an installed-wheel job, and a container
+   build have never executed. Expect Windows to surface something.
+2. **Generalise the description schema.** Five of the eight content fields
+   describe forex charts. The model returns `Unknown` rather than inventing, so
+   it is wasteful rather than dangerous, but a general-purpose tool that asks a
+   cooking video for its currency pair contradicts its own positioning on the
+   first video anybody tries. Recommended shape — per-job profiles, trading
+   preserved as one of them — is in `docs/DESCRIPTION_QUALITY.md`.
 3. **Exercise one cloud provider for real**, on a small job with a low cap. The
    adapters, the Check button, and the budget path have never met a real service.
-4. **Measure the token comparison across five or six videos** before any of §10
-   goes on a website. n=1, and a chart screencast is close to the best case.
-5. **Prune the event log.**
-6. **Decide on the unused design-system CSS and the three dead columns** (§7).
+   `test_readme_claims.py` refuses to let the README say otherwise until this
+   happens.
+4. **Run `scripts/benchmark.py` over five or six real videos** before any of §10
+   goes on a website. n=1, and a chart screencast is close to the best case. The
+   harness exists now and prints median and range; it just needs real material
+   and a few hours of wall clock.
+5. **Measure description accuracy.** The confidence field varies now. Whether a
+   `High` reading is *correct* is untested.
+6. **Prune the event log.**
+7. **Decide on the unused design-system CSS and the three dead columns** (§7).
 
 ---
 
