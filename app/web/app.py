@@ -28,6 +28,7 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from app.core.build import current_fingerprint, source_fingerprint
 from app.core.config import CUSTOM_ENDPOINT_PROVIDERS, Settings, assert_loopback
 from app.core.db import database_path, open_database, utc_now
 from app.core.locks import claim_is_stale
@@ -261,6 +262,10 @@ class NavGroup:
 
 
 def create_app(settings: Settings) -> FastAPI:
+    # Captured once, at import-and-construct time, so a later edit to any module
+    # moves the fingerprint on disk past this one.
+    loaded_fingerprint = source_fingerprint()
+
     # Asserted at construction rather than trusted. The boundary is the one
     # property of this application that must never quietly change.
     assert_loopback(settings.host, context="server bind host")
@@ -496,6 +501,11 @@ def create_app(settings: Settings) -> FastAPI:
                 ).fetchone()
 
             base = {
+                # True when the Python on disk is newer than the Python this
+                # process imported. Templates reload per request and routes do
+                # not, so an updated application serves new screens from old
+                # code — and every symptom of that looks like an ordinary bug.
+                "restart_needed": current_fingerprint() > loaded_fingerprint,
                 "nav_groups": nav(screen, connection),
                 "worker": worker_state(connection),
                 "disk_label": disk_label(),

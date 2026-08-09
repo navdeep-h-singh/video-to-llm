@@ -42,7 +42,18 @@
     function post(url, fields) {
       var body = new URLSearchParams();
       Object.keys(fields).forEach(function (k) { body.set(k, fields[k]); });
-      return fetch(url, { method: "POST", body: body }).then(function (r) { return r.json(); });
+      return fetch(url, { method: "POST", body: body }).then(function (r) {
+        // A 404 means the route is absent from the running process: this screen
+        // came from disk and the program did not. Saying "Not Found" would send
+        // the user looking for a missing model.
+        if (r.status === 404) {
+          throw new Error(
+            "This needs the application restarted \u2014 the screen is newer than the program running it."
+          );
+        }
+        if (!r.ok) throw new Error("That did not work (" + r.status + ").");
+        return r.json();
+      });
     }
 
     document.addEventListener("click", function (event) {
@@ -64,7 +75,7 @@
             field.value = "";
             result.textContent = data.ok ? "Key saved. It stays on this computer." : data.detail;
           })
-          .catch(function () { result.textContent = "Could not save the key."; });
+          .catch(function (error) { result.textContent = error.message || "Could not save the key."; });
         return;
       }
 
@@ -89,9 +100,9 @@
             result.textContent = data.detail
               || (data.models.length + " available \u2014 the box now suggests them.");
           })
-          .catch(function () {
+          .catch(function (error) {
             button.disabled = false;
-            result.textContent = "Could not reach this service.";
+            result.textContent = error.message || "Could not reach this service.";
           });
       }
     });

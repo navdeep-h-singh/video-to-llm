@@ -614,6 +614,20 @@
   // model box. One delegated listener rather than one per row: the rows are
   // generated, and a handler attached per element is a handler someone forgets
   // to attach to the next one.
+    function describeFailure(response) {
+      // A 404 here means the route does not exist in the running process — the
+      // screen was read from disk and the program was not. Reporting the raw
+      // "Not Found" from the framework sends the user hunting for a missing
+      // model or a bad key, neither of which is the problem.
+      if (response.status === 404) {
+        return "This needs the application restarted — the screen is newer than the program running it.";
+      }
+      if (response.status === 403) {
+        return "This request was refused. Reload the page and try again.";
+      }
+      return "Could not check (" + response.status + ").";
+    }
+
   document.addEventListener("click", function (event) {
     var button = event.target.closest("[data-check-models]");
     if (!button) return;
@@ -630,8 +644,21 @@
     button.disabled = true;
     result.textContent = "Checking\u2026";
 
+    // An unsaved key is the most likely reason a check fails on a service the
+    // user has just typed into: Check reads the stored key, and typing is not
+    // storing.
+    var typed = row.parentElement.querySelector('input[name="api_key"]');
+    if (typed && typed.value.trim()) {
+      result.textContent = "Press Save first — the check reads the stored key.";
+      button.disabled = false;
+      return;
+    }
+
     fetch("/api/providers/models", { method: "POST", body: body })
-      .then(function (r) { return r.json(); })
+      .then(function (r) {
+        if (!r.ok) throw new Error(describeFailure(r));
+        return r.json();
+      })
       .then(function (data) {
         button.disabled = false;
         if (!data.ok) { result.textContent = data.detail || "Could not check."; return; }
@@ -647,9 +674,9 @@
         result.textContent = data.detail
           || (data.models.length + " available \u2014 the box now suggests them.");
       })
-      .catch(function () {
+      .catch(function (error) {
         button.disabled = false;
-        result.textContent = "Could not reach this service.";
+        result.textContent = error.message || "Could not reach this service.";
       });
   });
 

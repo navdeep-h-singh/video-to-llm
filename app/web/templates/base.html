@@ -51,6 +51,36 @@
 
     <main class="main" id="main">
       {#
+        The application on disk is newer than the one running.
+
+        Screens are read from disk on every request; route code is imported once
+        and stays in memory. So an updated application serves new screens from
+        old code, and the symptoms never look like what they are: a screen where
+        every service lost its name, a button reporting "Not Found" because the
+        route it calls was added after the server started. Diagnosing that from
+        the symptom costs more than saying it plainly here.
+
+        Only Python counts. Templates and CSS are meant to change under a
+        running server, and flagging those would advise a restart that changes
+        nothing — a warning that cries wolf is worse than none.
+      #}
+      {% if restart_needed | default(false, true) %}
+      <div class="panel" role="status"
+           style="border-left:3px solid var(--color-accent);margin-bottom:var(--space-4)">
+        <h4 style="margin:0 0 var(--space-2)">This application was updated — restart it</h4>
+        <p style="font-size:14px;margin:0">
+          The screens you are looking at came from disk, but the program behind
+          them is the one that was running before the update. Until it is
+          restarted, some buttons will call for things that do not exist yet.
+        </p>
+        <pre class="note note-neutral" style="margin-top:var(--space-2);white-space:pre-wrap;overflow-x:auto">video-to-llm start</pre>
+        <p class="text-muted" style="font-size:12px;margin:var(--space-2) 0 0">
+          Work already finished is kept, and a job picks up from where it stopped.
+        </p>
+      </div>
+      {% endif %}
+
+      {#
         Finished while you were away. This product is built for work that runs
         for hours while you do something else, so the interesting moment is
         almost always one you were not watching. Backed by a column rather than
