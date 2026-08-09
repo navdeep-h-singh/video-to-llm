@@ -1,10 +1,34 @@
 [project]
 name = "video-to-llm"
 version = "1.0.0"
-description = "Localhost-only pipeline turning local videos into timestamped, reviewable, LLM-ready evidence and ordered collections."
+description = "Turn hours of local video into timestamped, citable, LLM-ready text. Fully offline. Resumable."
 readme = "README.md"
-requires-python = ">=3.11,<3.12"
+requires-python = ">=3.11,<3.14"
 license = { text = "MIT" }
+keywords = [
+    "llm", "video", "whisper", "ffmpeg", "transcription", "local-first",
+    "privacy", "offline", "rag", "ollama", "mcp", "multimodal",
+    "video-analysis", "context-engineering",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Education",
+    "Intended Audience :: Legal Industry",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Video",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Text Processing :: Linguistic",
+]
 
 dependencies = [
     "fastapi>=0.115",
@@ -21,7 +45,21 @@ dependencies = [
     "filelock>=3.16",
 ]
 
+# Set OWNER before publishing. `scripts/pre_publish_audit.py` refuses to pass
+# while the placeholder is still here, so a release cannot carry a dead link.
+[project.urls]
+Homepage = "https://github.com/OWNER/video-to-llm"
+Documentation = "https://github.com/OWNER/video-to-llm/tree/main/docs"
+Source = "https://github.com/OWNER/video-to-llm"
+Issues = "https://github.com/OWNER/video-to-llm/issues"
+Changelog = "https://github.com/OWNER/video-to-llm/releases"
+
 [project.optional-dependencies]
+# The MCP server is optional so the core install stays free of a dependency
+# only agent hosts need. `video-to-llm mcp` says so when it is missing.
+mcp = [
+    "mcp>=1.2",
+]
 dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
@@ -42,6 +80,12 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
+
+[tool.hatch.build.targets.sdist]
+# The skill and the docs ship with the source distribution: a skill host that
+# vendors from sdist needs SKILL.md, and the limitations in docs/ are part of
+# what the package claims about itself.
+include = ["app", "config", "docs", "skill", "scripts", "README.md", "LICENSE"]
 
 [tool.ruff]
 line-length = 100

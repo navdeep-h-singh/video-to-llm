@@ -47,9 +47,17 @@ def database_path(output_root: Path) -> Path:
 
 
 def migrations_dir() -> Path:
-    from app.core.config import repo_root
+    """Where the schema lives — inside the package, not beside it.
 
-    return repo_root() / MIGRATIONS_DIRNAME
+    This used to resolve to ``repo_root() / "migrations"``, which is correct for
+    a source checkout and wrong for every installed copy: from
+    ``site-packages/app/core/db.py`` that points at ``site-packages/migrations``,
+    which does not exist, so a pip-installed build could not create its own
+    database. The tool had only ever been run from a checkout, so nothing caught
+    it. Resolving against the package means the schema travels with the code
+    that reads it, wherever that code was installed from.
+    """
+    return Path(__file__).resolve().parents[1] / MIGRATIONS_DIRNAME
 
 
 # ── Connections ───────────────────────────────────────────────────────────

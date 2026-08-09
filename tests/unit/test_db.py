@@ -189,6 +189,38 @@ def test_the_real_migration_splits_cleanly():
     assert all(s.strip() for s in statements)
 
 
+def test_the_schema_lives_inside_the_installed_package():
+    """The migrations must travel with the code, not sit beside the checkout.
+
+    `migrations_dir()` resolved to `repo_root() / "migrations"`, which is the
+    same folder as the package only when running from a source tree. Installed,
+    it pointed at `site-packages/migrations` — absent — so a pip-installed copy
+    raised on its first attempt to create a database. Every test passed, because
+    every test ran from the checkout.
+
+    Asserting the directory is *inside* `app/` is what makes the wheel correct:
+    hatchling ships the package directory, and nothing else here is guaranteed
+    to be shipped at all.
+    """
+    from pathlib import Path
+
+    import app as app_package
+    from app.core.db import migrations_dir
+
+    package_root = Path(app_package.__file__).resolve().parent
+    resolved = Path(migrations_dir()).resolve()
+
+    assert resolved.parent == package_root, (
+        f"Migrations resolve to {resolved}, which is outside the package at "
+        f"{package_root}. An installed copy would not find them."
+    )
+    assert sorted(p.name for p in resolved.glob("*.sql")) == [
+        "001_initial.sql",
+        "002_completion_acknowledgement.sql",
+        "003_job_folder_name.sql",
+    ]
+
+
 # ── Transactions ──────────────────────────────────────────────────────────
 
 
