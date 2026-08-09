@@ -49,6 +49,7 @@ DOCUMENTED_COMMANDS = {
     "process",
     "show",
     "export",
+    "mcp",
     "start",
     "start-ui",
     "run-worker",

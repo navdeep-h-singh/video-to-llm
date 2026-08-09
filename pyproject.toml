@@ -69,6 +69,8 @@ dev = [
     "types-requests",
     "respx>=0.21",
     "pre-commit>=4.0",
+    # So CI exercises the MCP transport, not only the plain tool functions.
+    "mcp>=1.2",
 ]
 
 [project.scripts]

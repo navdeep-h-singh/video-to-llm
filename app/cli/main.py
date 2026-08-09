@@ -298,6 +298,13 @@ def cmd_export(args: argparse.Namespace) -> int:
     return 0 if wrote else 1
 
 
+def cmd_mcp(args: argparse.Namespace) -> int:
+    """Serve the MCP tools on stdio, for an agent host to connect to."""
+    from app.mcp.server import run
+
+    return run()
+
+
 def cmd_import(args: argparse.Namespace) -> int:
     from app.services.importer import import_processed_output
 
@@ -407,6 +414,13 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("smoke-test", help="End-to-end run on generated media, no network").set_defaults(
         func=cmd_smoke_test
     )
+
+    sub.add_parser(
+        "mcp",
+        help="Serve the MCP tools on stdio, for Claude Code, Cursor, and other hosts",
+        description="Expose processing, reading, and citation as MCP tools. Needs the "
+        "`mcp` extra: pip install 'video-to-llm[mcp]'.",
+    ).set_defaults(func=cmd_mcp)
 
     importer = sub.add_parser("import", help="Bring previously processed output under management")
     importer.add_argument("path", help="Folder holding previously processed output")
