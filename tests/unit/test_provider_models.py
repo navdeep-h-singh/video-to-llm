@@ -167,3 +167,62 @@ def test_no_model_is_invented_in_the_rendered_file():
     body = rendered[rendered.index("[visual_analysis.models]") :]
     body = body[: body.index("[visual_analysis.base_urls]")]
     assert not [line for line in body.splitlines()[1:] if line.strip() and "=" in line]
+
+
+# ── Every service is identifiable on screen ───────────────────────────────
+
+
+def test_each_service_is_named_on_the_settings_screen(client):
+    """Five identical grey boxes each reading only "No key set." give no way to
+    tell which pair of fields belongs to which service."""
+    from app.core.config import PROVIDER_LABELS
+
+    body = client.get("/settings").text
+
+    for provider, label in PROVIDER_LABELS.items():
+        if provider == "ollama_local":
+            continue
+        assert label in body, f"{provider} is not named on the settings screen"
+
+
+def test_a_service_is_named_even_when_the_route_supplies_no_label():
+    """Templates are re-read from disk per request; route code is not.
+
+    So a server started before `label` existed serves this template against a
+    context without it. That really happened: every service rendered as an
+    unnamed box. A screen must not depend on the route being the same age as the
+    template it renders.
+    """
+    from jinja2 import ChainableUndefined, Environment, FileSystemLoader, select_autoescape
+
+    from app.credentials.store import CredentialSource, CredentialStatus
+    from app.web.app import TEMPLATE_DIR
+
+    # Chainable undefined so the *rest* of the page's context can be absent
+    # without obscuring the one thing under test: whether a service still gets a
+    # name when the route does not supply one.
+    environment = Environment(
+        loader=FileSystemLoader(str(TEMPLATE_DIR)),
+        autoescape=select_autoescape(),
+        undefined=ChainableUndefined,
+    )
+    template = environment.get_template("settings.html")
+
+    # Deliberately no "label" key — the shape an older route produced.
+    stale = [
+        {
+            "provider": "anthropic",
+            "status": CredentialStatus(
+                provider="anthropic",
+                present=False,
+                source=CredentialSource.NONE,
+                detail="No key set.",
+            ),
+            "model": "",
+            "base_url": "",
+            "needs_address": False,
+        }
+    ]
+
+    rendered = template.render(credentials=stale, secure_store=True)
+    assert "Claude" in rendered, "an unlabelled service rendered with no name at all"

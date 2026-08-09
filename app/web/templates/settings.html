@@ -231,8 +231,21 @@
   <div class="keys">
     {% for entry in credentials %}
     <div class="key-row">
+      {#
+        The name falls back to a locally-derived one. Templates are re-read from
+        disk on every request while route code stays in memory, so a server
+        started before `label` was added renders this file against a context
+        that has none — and every service then appeared as an unnamed grey box
+        reading only "No key set.", which is exactly the state this heading
+        exists to prevent. A screen must not depend on the route being the same
+        age as the template.
+      #}
       <div class="key-name">
-        <strong>{{ entry.label }}</strong>
+        <strong>{{ entry.label | default(
+          {'anthropic': 'Claude', 'google': 'Google Gemini', 'openai': 'OpenAI',
+           'openai_compatible': 'Another service (OpenAI format)',
+           'anthropic_compatible': 'Another service (Claude format)'}.get(
+             entry.provider, entry.provider), true) }}</strong>
         {#
           The tag and the sentence used to say the same thing twice — "No key
           set" above "No key set." The detail sentence carries strictly more
@@ -241,8 +254,9 @@
         {% if entry.status.present %}
           <span class="tag tag-neutral">Key set</span>
         {% endif %}
-        <div class="text-muted" style="font-size:12px">{{ entry.status.detail }}</div>
+        <span class="key-detail">{{ entry.status.detail }}</span>
       </div>
+      <div class="key-controls">
 
       <form method="post" action="/settings/key" class="inline-form">
         <input type="hidden" name="provider" value="{{ entry.provider }}">
@@ -300,6 +314,7 @@
 
         <button class="btn btn-secondary" type="button" data-check-models>Check</button>
         <span class="check-result text-muted" style="font-size:12px" role="status"></span>
+      </div>
       </div>
     </div>
     {% endfor %}
