@@ -1,7 +1,14 @@
 """Command-line entry point.
 
-The whole pipeline is reachable from here without ever opening the browser. The
-interface controls and observes jobs; it does not own them.
+The whole pipeline is reachable from here without ever opening the browser:
+`process` creates a job and runs it to completion, `show` resolves a timestamp
+back to the frame it names. The interface controls and observes jobs; it does
+not own them, and it is no longer the only thing that can start one.
+
+This claim was false for the first three sessions of this project — the README
+and this docstring both made it while job creation existed solely as a web
+form — which is why `tests/unit/test_cli.py` now asserts every documented
+command actually parses.
 """
 
 from __future__ import annotations
@@ -132,6 +139,165 @@ def cmd_smoke_test(args: argparse.Namespace) -> int:
     return run_smoke_test(settings)
 
 
+#: Export formats, named here so building the parser costs no service imports.
+#: Duplicating the list is only safe because `test_cli.py` pins it against
+#: `app.services.export.EXPORTERS` — the same guard the settings template's
+#: provider labels carry, and for the same reason: a choice the parser offers
+#: and the exporter cannot render is a control that lies.
+EXPORT_FORMATS = ("json", "jsonl", "md", "srt", "vtt")
+
+#: What `--describe` accepts, mapped to the provider names the pipeline uses.
+#: "local" rather than "ollama_local" because the flag names the *place* the
+#: work happens, which is the distinction the user is making. The service names
+#: match the settings file so a value copied from one to the other still works.
+DESCRIBE_CHOICES = {
+    "none": "none",
+    "local": "ollama_local",
+    "ollama_local": "ollama_local",
+    "anthropic": "anthropic",
+    "google": "google",
+    "openai": "openai",
+    "openai_compatible": "openai_compatible",
+    "anthropic_compatible": "anthropic_compatible",
+}
+
+
+def cmd_process(args: argparse.Namespace) -> int:
+    """Create a job for the given videos and run it to completion."""
+    from app.core.config import MAX_INTERVAL_SECONDS, MIN_INTERVAL_SECONDS
+    from app.services.headless import process_videos
+
+    settings = _resolve_settings(args)
+
+    paths = [Path(p).expanduser() for p in args.videos]
+    provider = DESCRIBE_CHOICES[args.describe]
+
+    interval_ms: int | None = None
+    if args.interval is not None:
+        if not MIN_INTERVAL_SECONDS <= args.interval <= MAX_INTERVAL_SECONDS:
+            print(
+                f"--interval must be between {MIN_INTERVAL_SECONDS:g} and "
+                f"{MAX_INTERVAL_SECONDS:g} seconds.",
+                file=sys.stderr,
+            )
+            return 2
+        interval_ms = round(args.interval * 1000)
+
+    # A model is required for every service except the ones that have no model
+    # to choose. Saying so here beats creating the job and failing inside the
+    # stage, which leaves a half-run job behind for the user to clean up.
+    model_id = (args.model or "").strip()
+    if provider not in {"none"} and not model_id:
+        model_id = settings.visual_analysis.model_for(provider)
+    if provider != "none" and not model_id:
+        print(
+            f"No model is set for {provider}. Pass --model, or set one in the "
+            "interface under Settings.",
+            file=sys.stderr,
+        )
+        return 2
+
+    result = process_videos(
+        settings,
+        paths=paths,
+        name=args.name,
+        interval_ms=interval_ms,
+        provider=provider,
+        model_id=model_id,
+    )
+
+    for warning in result.warnings:
+        print(f"note: {warning}", file=sys.stderr)
+
+    if result.job_id is None:
+        for problem in result.problems:
+            print(problem, file=sys.stderr)
+        return 1
+
+    for problem in result.problems:
+        print(problem, file=sys.stderr)
+
+    if not result.documents:
+        print(f"Finished as '{result.status}' with no assembled document.", file=sys.stderr)
+        return 1
+
+    if result.status == "completed_with_gaps":
+        print(
+            "Finished with gaps — some pictures went undescribed. The transcript "
+            "and the frames are complete.",
+            file=sys.stderr,
+        )
+
+    if args.format:
+        from app.services.export import ExportError, export_video_dir
+
+        # The per-video folder holds the structured artifacts an export is built
+        # from. A master document spans several of them and has no single
+        # transcript, so exports are written per video and named accordingly.
+        for video_dir in sorted({d.parent for d in result.documents}):
+            for fmt in dict.fromkeys(args.format):
+                try:
+                    print(export_video_dir(video_dir, fmt))
+                except ExportError as error:
+                    print(f"Could not write {fmt}: {error}", file=sys.stderr)
+
+    for document in result.documents:
+        print(document)
+    return 0
+
+
+def cmd_show(args: argparse.Namespace) -> int:
+    """Resolve a timestamp back to what was happening at it."""
+    from app.services.citation import CitationError, format_citation, resolve_citation
+
+    settings = _resolve_settings(args)
+    try:
+        citation = resolve_citation(settings, args.job, args.timestamp, window=args.window)
+    except CitationError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    print(format_citation(citation))
+    return 0
+
+
+def cmd_export(args: argparse.Namespace) -> int:
+    """Re-render an already-processed job into other formats."""
+    from app.core.db import database_path, open_database
+    from app.services.citation import CitationError, find_job
+    from app.services.citation import video_dirs as video_dirs_for
+    from app.services.export import ExportError, export_video_dir
+
+    settings = _resolve_settings(args)
+    root = settings.output_root
+    if root is None or not database_path(Path(root)).exists():
+        print("No jobs yet. Run `video-to-llm process <video>` first.", file=sys.stderr)
+        return 1
+
+    connection = open_database(Path(root), migrate_on_open=False)
+    try:
+        job = find_job(connection, args.job)
+        video_dirs = video_dirs_for(connection, Path(root), job)
+    except CitationError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    finally:
+        connection.close()
+
+    if not video_dirs:
+        print(f"'{args.job}' has no output on disk yet.", file=sys.stderr)
+        return 1
+
+    wrote = False
+    for video_dir in video_dirs:
+        for fmt in dict.fromkeys(args.format):
+            try:
+                print(export_video_dir(video_dir, fmt))
+                wrote = True
+            except ExportError as error:
+                print(f"{video_dir.name}: {error}", file=sys.stderr)
+    return 0 if wrote else 1
+
+
 def cmd_import(args: argparse.Namespace) -> int:
     from app.services.importer import import_processed_output
 
@@ -152,6 +318,77 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--log-level", default=None, help="DEBUG, INFO, WARNING, or ERROR")
 
     sub = parser.add_subparsers(dest="command", required=True)
+
+    process = sub.add_parser(
+        "process",
+        help="Process one or more videos now and print where the document went",
+        description="Create a job for these videos, run it to completion, and print the "
+        "path of each assembled document. Nothing is uploaded unless --describe names "
+        "a service.",
+    )
+    process.add_argument("videos", nargs="+", help="Paths to the video files, in order")
+    process.add_argument("--name", default=None, help="Job name (default: the first filename)")
+    process.add_argument(
+        "--interval",
+        type=float,
+        default=None,
+        metavar="SECONDS",
+        help="Seconds between pictures, 0.5 to 10 (default: the interval in your settings)",
+    )
+    process.add_argument(
+        "--describe",
+        choices=sorted(DESCRIBE_CHOICES),
+        default="none",
+        help="Describe the pictures with a vision model. 'local' uses your own Ollama; "
+        "everything else sends pictures to that service (default: none)",
+    )
+    process.add_argument(
+        "--model", default=None, help="Model to describe with (default: the one in settings)"
+    )
+    process.add_argument(
+        "--format",
+        action="append",
+        default=None,
+        choices=sorted(EXPORT_FORMATS),
+        metavar="FORMAT",
+        help=f"Also write this format beside the document ({', '.join(sorted(EXPORT_FORMATS))}). "
+        "Repeatable.",
+    )
+    process.set_defaults(func=cmd_process)
+
+    export = sub.add_parser(
+        "export",
+        help="Write another format from a video that has already been processed",
+        description="Re-render an already-processed video into another format. Reads the "
+        "structured artifacts, so it never re-extracts, re-transcribes, or re-describes.",
+    )
+    export.add_argument("job", help="Job name or identifier")
+    export.add_argument(
+        "--format",
+        action="append",
+        required=True,
+        choices=sorted(EXPORT_FORMATS),
+        metavar="FORMAT",
+        help=f"One of: {', '.join(sorted(EXPORT_FORMATS))}. Repeatable.",
+    )
+    export.set_defaults(func=cmd_export)
+
+    show = sub.add_parser(
+        "show",
+        help="Show what was happening at a timestamp, and the picture from it",
+        description="Resolve a citation. Given a job and a timestamp, print the "
+        "surrounding transcript and the path to the frame taken at that moment.",
+    )
+    show.add_argument("job", help="Job name or identifier")
+    show.add_argument("timestamp", help="HH:MM:SS, MM:SS, or seconds")
+    show.add_argument(
+        "--window",
+        type=float,
+        default=15.0,
+        metavar="SECONDS",
+        help="How much either side to include (default: 15)",
+    )
+    show.set_defaults(func=cmd_show)
 
     start = sub.add_parser("start", help="Start the interface and the worker together")
     start.add_argument("--port", type=int, default=None)

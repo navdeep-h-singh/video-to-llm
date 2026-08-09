@@ -53,10 +53,18 @@ def _job_folder(job: sqlite3.Row) -> str:
 
 
 class Worker:
-    def __init__(self, settings: Settings, connection: sqlite3.Connection, worker_id: str):
+    def __init__(
+        self,
+        settings: Settings,
+        connection: sqlite3.Connection,
+        worker_id: str,
+        *,
+        only_job_id: str | None = None,
+    ):
         self.settings = settings
         self.connection = connection
         self.worker_id = worker_id
+        self.only_job_id = only_job_id
         self.output_root: Path = settings.output_root  # type: ignore[assignment]
         self._stop = threading.Event()
         self._last_heartbeat = 0.0
@@ -152,7 +160,20 @@ class Worker:
             thread.join(timeout=HEARTBEAT_INTERVAL_SECONDS)
 
     def claim_next_job(self) -> sqlite3.Row | None:
-        """Return the oldest job waiting for work, if any."""
+        """Return the oldest job waiting for work, if any.
+
+        When the worker is scoped to one job it considers only that job. A
+        headless `process` run creates a job and then turns the loop once; if
+        that turn took the oldest *ready* job instead, a video queued earlier in
+        the interface would run in its place — and where that job names a cloud
+        service, the command would spend money on work the user did not just ask
+        for. A one-shot run does the thing it was asked to do, or nothing.
+        """
+        if self.only_job_id is not None:
+            return self.connection.execute(
+                "SELECT * FROM jobs WHERE id = ? AND status = 'ready'",
+                (self.only_job_id,),
+            ).fetchone()
         return self.connection.execute(
             "SELECT * FROM jobs WHERE status = 'ready' ORDER BY created_at LIMIT 1"
         ).fetchone()
@@ -419,7 +440,7 @@ class Worker:
 CLAIM_RETRY_SECONDS = 20.0
 
 
-def run_worker(settings: Settings, *, once: bool = False) -> int:
+def run_worker(settings: Settings, *, once: bool = False, only_job_id: str | None = None) -> int:
     """Take ownership of the output root and run the loop. Returns an exit code.
 
     A claim conflict is treated as temporary, not fatal, whenever the worker is
@@ -451,7 +472,7 @@ def run_worker(settings: Settings, *, once: bool = False) -> int:
         while not stop.is_set():
             try:
                 with worker_lock(connection, root) as worker_id:
-                    worker = Worker(settings, connection, worker_id)
+                    worker = Worker(settings, connection, worker_id, only_job_id=only_job_id)
 
                     # Only install handlers on the main thread: `start` runs the
                     # worker in a background thread, where signal() raises.
