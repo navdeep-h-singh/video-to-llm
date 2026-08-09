@@ -113,6 +113,28 @@ jobs:
         shell: bash
         if: runner.os != 'Windows'
 
+  # Unverified locally: the machine this was written on has no Docker. The image
+  # is built and exercised here or nowhere.
+  docker:
+    name: Container image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: docker build -t video-to-llm:ci .
+
+      - name: The command line works inside the image
+        run: |
+          docker run --rm video-to-llm:ci --help
+          docker run --rm video-to-llm:ci process --help
+
+      - name: End to end on synthetic media, no network
+        run: |
+          docker run --rm --network none \
+            -e VIDEO_TO_LLM_NO_NETWORK=1 \
+            video-to-llm:ci smoke-test
+
   secret-scan:
     name: Secret scan
     runs-on: ubuntu-latest

@@ -1,0 +1,121 @@
+name: Release
+
+# Publishing is deliberately manual and tag-driven. Nothing here runs on a push
+# to a branch: a release is a decision, not a side effect of merging.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # The gate. A release that skipped the tests would be the one thing worse than
+  # no release, and `--release` additionally refuses while the repository still
+  # carries the OWNER placeholder in its metadata — those become dead links on
+  # the PyPI project page the moment it is published.
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    env:
+      VIDEO_TO_LLM_NO_NETWORK: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - run: uv sync --locked --extra dev
+
+      - run: uv run ruff format --check .
+      - run: uv run ruff check .
+      - run: uv run mypy app
+      - run: uv run pytest -q --deselect tests/integration/test_live_ollama.py
+      - run: uv run python scripts/pre_publish_audit.py --release
+      - run: uv run video-to-llm smoke-test
+
+      - name: The version in the tag matches the version in the package
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tagged="${GITHUB_REF_NAME#v}"
+          packaged="$(uv run python -c 'import tomllib,pathlib;print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
+          if [ "$tagged" != "$packaged" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match pyproject version $packaged" >&2
+            exit 1
+          fi
+
+  build:
+    name: Build the distribution
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+
+      - run: uv build
+
+      # A wheel that cannot create its own database is not a release. This is
+      # the failure that shipped unnoticed for three sessions, because every
+      # test ran from the checkout where the schema happened to be reachable.
+      - name: The built wheel runs outside the checkout
+        run: |
+          sudo apt-get update && sudo apt-get install -y ffmpeg
+          uv venv /tmp/verify --python 3.12
+          uv pip install --python /tmp/verify dist/*.whl
+          cd /tmp
+          /tmp/verify/bin/video-to-llm --output-root /tmp/release-root smoke-test
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: distribution
+          path: dist/
+
+  pypi:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment: release
+    # Trusted publishing: no API token is stored anywhere in this repository.
+    # Configure the publisher at https://pypi.org/manage/account/publishing/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: distribution
+          path: dist/
+
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  container:
+    name: Publish the container image
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/metadata-action@v5
+        id: meta
+        with:
+          images: ghcr.io/${{ github.repository }}
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

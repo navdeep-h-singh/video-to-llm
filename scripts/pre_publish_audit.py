@@ -245,8 +245,46 @@ def audit() -> list[str]:
     return findings
 
 
-def main() -> int:
+#: Assembled rather than written out, so this file does not match its own check.
+OWNER_PLACEHOLDER = "github.com/" + "OWNER" + "/"
+
+
+def unresolved_placeholders() -> list[str]:
+    """Where the repository still says OWNER instead of an account name.
+
+    There is no git remote yet, so the package metadata, the plugin manifest and
+    the README all carry a placeholder where the account belongs. Each one is a
+    dead link the moment anything ships: a PyPI page pointing at a 404, a plugin
+    whose homepage does not exist, README badges that never render.
+
+    Deliberately **not** part of `audit()`. Every day this sits unpublished is a
+    day the placeholder is the honest value, and failing the ordinary build over
+    it would leave CI permanently red for a condition nobody can fix until the
+    remote exists. It blocks the release instead, where it is genuinely fatal —
+    see `--release` and the publish workflow.
+    """
+    found: list[str] = []
+    for path in tracked_files():
+        if not is_text(path):
+            continue
+        try:
+            content = (REPO / path).read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for number, line in enumerate(content.splitlines(), start=1):
+            if OWNER_PLACEHOLDER in line:
+                found.append(f"{path}:{number}: still says OWNER where the account name goes")
+    return found
+
+
+def main(argv: list[str] | None = None) -> int:
+    releasing = "--release" in (argv if argv is not None else sys.argv[1:])
+
     findings = audit()
+    placeholders = unresolved_placeholders()
+    if releasing:
+        findings.extend(placeholders)
+
     if findings:
         print("Pre-publish audit FAILED\n", file=sys.stderr)
         for finding in findings:
@@ -255,6 +293,13 @@ def main() -> int:
         return 1
 
     print(f"Pre-publish audit passed — {len(tracked_files())} tracked files, no findings.")
+    if placeholders:
+        # Not a failure yet, but it must be impossible to forget. `--release`
+        # turns every one of these into a blocking finding.
+        print(
+            f"\nNote: {len(placeholders)} unresolved OWNER placeholder(s). "
+            "Set the real account before publishing — `--release` refuses while they remain."
+        )
     return 0
 
 

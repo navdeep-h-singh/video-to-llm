@@ -1,0 +1,28 @@
+# Keep the build context small and, more importantly, keep anything local out
+# of an image that may be pushed to a public registry.
+.git
+.github
+.venv
+.mypy_cache
+.pytest_cache
+.ruff_cache
+**/__pycache__
+*.pyc
+dist
+build
+htmlcov
+.coverage
+tests
+docs
+design_reference
+scripts/setup_*.sh
+scripts/setup_*.ps1
+config/settings.toml
+.env
+.env.*
+!.env.example
+*.mp4
+*.webm
+*.mkv
+*.mov
+.DS_Store

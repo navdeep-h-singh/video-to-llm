@@ -1,0 +1,29 @@
+{
+  "name": "video-to-llm",
+  "version": "1.0.0",
+  "description": "Read local video by turning it into one timestamped, citable document — once. Fully offline, resumable, built for hours of video.",
+  "author": {
+    "name": "the video-to-llm contributors"
+  },
+  "homepage": "https://github.com/OWNER/video-to-llm",
+  "repository": "https://github.com/OWNER/video-to-llm",
+  "license": "MIT",
+  "keywords": [
+    "video",
+    "transcription",
+    "whisper",
+    "local-first",
+    "offline",
+    "privacy",
+    "citations"
+  ],
+  "skills": [
+    "./skill"
+  ],
+  "mcpServers": {
+    "video-to-llm": {
+      "command": "video-to-llm",
+      "args": ["mcp"]
+    }
+  }
+}
