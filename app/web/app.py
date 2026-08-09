@@ -275,6 +275,20 @@ class NavGroup:
     items: list[NavItem]
 
 
+def _interval_from_form(interval: str) -> int | None:
+    """The picture interval a form submitted, or None to use the setting.
+
+    Shared by the create route and the plan route rather than inlined in each.
+    A plan that computed a different frame count from the job it is previewing
+    would be worse than no plan, and two copies of three lines is exactly how
+    that happens.
+    """
+    try:
+        return None if interval == "custom" else int(interval)
+    except ValueError:
+        return None
+
+
 def create_app(settings: Settings) -> FastAPI:
     # Captured once, at import-and-construct time, so a later edit to any module
     # moves the fingerprint on disk past this one.
@@ -1233,10 +1247,7 @@ def create_app(settings: Settings) -> FastAPI:
         if connection is None:
             return RedirectResponse("/launch", status_code=303)
 
-        try:
-            interval_ms = None if interval == "custom" else int(interval)
-        except ValueError:
-            interval_ms = None
+        interval_ms = _interval_from_form(interval)
 
         # "external" is the design's grouping for "a service you have an account
         # with". Which one is now answered on this screen: the card is the
@@ -2507,6 +2518,55 @@ def create_app(settings: Settings) -> FastAPI:
         )
         logger.info("Started a background worker on request")
         return RedirectResponse("/settings", status_code=303)
+
+    # ── What a job would produce, before it is started ────────────────────
+
+    @app.post("/api/plan")
+    def plan_job(
+        paths: str = Form(""),
+        interval: str = Form("2000"),
+        provider: str = Form("none"),
+        service: str = Form(""),
+        model_id: str = Form(""),
+    ) -> JSONResponse:
+        """Probe the chosen videos and report what starting would involve.
+
+        Creates nothing and starts nothing. It runs the same preflight the create
+        path runs, so a problem reported here is the problem that would actually
+        stop the job rather than a second opinion.
+
+        This exists because the screen said nothing until after the decision. The
+        moment a user is weighing whether to trust "nothing is uploaded" was
+        exactly the moment the interface stayed quiet about it.
+        """
+        from app.services.jobs import parse_paths
+        from app.services.plan import build_plan
+
+        connection = connect()
+        if connection is None:
+            return JSONResponse({"ok": False, "problems": ["No output folder is set yet."]})
+
+        interval_ms = _interval_from_form(interval)
+
+        # "external" is the card; `service` is which one. Same resolution the
+        # create route does, kept in step by using the same helper.
+        resolved = provider
+        if provider == "external":
+            chosen = service.strip()
+            resolved = chosen if chosen in PROVIDERS else "none"
+
+        try:
+            plan = build_plan(
+                connection,
+                current(),
+                paths=parse_paths(paths),
+                interval_ms=interval_ms,
+                provider=resolved,
+                model_id=model_id.strip(),
+            )
+            return JSONResponse(plan.as_dict())
+        finally:
+            connection.close()
 
     # ── Browsing the filesystem for videos (F05) ──────────────────────────
 

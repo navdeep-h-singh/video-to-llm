@@ -89,6 +89,71 @@ def measured_rate(
     return (rates[middle - 1] + rates[middle]) / 2, len(rates)
 
 
+def measured_rate_per_video_second(
+    connection: sqlite3.Connection, stage: str
+) -> tuple[float | None, int]:
+    """Median wall-clock seconds spent per second of video, for a stage.
+
+    Needed because `measured_rate` divides by `items_done`, and for transcription
+    that unit is *speech segments* — a count nobody can know before transcribing.
+    Estimating a new video from a segment rate would be the same mistake the
+    progress bar already avoids: segments run from a second to several minutes,
+    so any prediction built on them is wrong.
+
+    Video duration is knowable in advance, recorded on `job_videos`, and stable
+    across files. That makes it the only honest basis for a transcription
+    estimate.
+    """
+    rows = connection.execute(
+        "SELECT s.started_at, s.finished_at, v.duration_seconds"
+        " FROM stage_runs s JOIN job_videos v ON v.id = s.job_video_id"
+        " WHERE s.stage = ? AND s.status IN ('completed', 'completed_with_gaps')"
+        " AND s.finished_at IS NOT NULL AND v.duration_seconds > 0"
+        " ORDER BY s.id DESC LIMIT 20",
+        (stage,),
+    ).fetchall()
+
+    rates: list[float] = []
+    for row in rows:
+        try:
+            start = datetime.fromisoformat(row["started_at"])
+            end = datetime.fromisoformat(row["finished_at"])
+        except (TypeError, ValueError):
+            continue
+        if start.tzinfo is None:
+            start = start.replace(tzinfo=UTC)
+        if end.tzinfo is None:
+            end = end.replace(tzinfo=UTC)
+
+        seconds = (end - start).total_seconds()
+        duration = float(row["duration_seconds"] or 0)
+        if seconds <= 0 or duration <= 0:
+            continue
+        rates.append(seconds / duration)
+
+    if len(rates) < MIN_SAMPLES:
+        return None, len(rates)
+
+    rates.sort()
+    middle = len(rates) // 2
+    if len(rates) % 2:
+        return rates[middle], len(rates)
+    return (rates[middle - 1] + rates[middle]) / 2, len(rates)
+
+
+def estimate_by_video_seconds(
+    connection: sqlite3.Connection, stage: str, video_seconds: float
+) -> Estimate:
+    """How long *stage* should take on this much video, if we can tell."""
+    if video_seconds <= 0:
+        return Estimate(seconds=None, samples=0)
+
+    rate, samples = measured_rate_per_video_second(connection, stage)
+    if rate is None:
+        return Estimate(seconds=None, samples=samples)
+    return Estimate(seconds=rate * video_seconds, samples=samples)
+
+
 def estimate_stage(
     connection: sqlite3.Connection, stage: str, items: int, *, model_id: str | None = None
 ) -> Estimate:

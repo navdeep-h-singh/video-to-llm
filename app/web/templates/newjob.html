@@ -220,6 +220,138 @@
     load("");
     syncTextarea();
   })();
+
+  // "What you'll get", kept in step with the choices above it.
+  //
+  // The screen used to say nothing until after the job had been created, which
+  // meant the moment someone was deciding whether to trust "nothing is
+  // uploaded" was the moment it was silent. Every figure comes from the server
+  // probing the real files; nothing is computed here, because a second
+  // implementation of the frame count is a second answer waiting to disagree.
+  (function () {
+    var panel = document.getElementById("plan");
+    var state = document.getElementById("plan-state");
+    var figures = document.getElementById("plan-figures");
+    var leaves = document.getElementById("plan-leaves");
+    var problems = document.getElementById("plan-problems");
+    var problemList = document.getElementById("plan-problem-list");
+    var form = panel && panel.closest("form");
+    if (!panel || !form) return;
+
+    var timer = null;
+    var inFlight = 0;
+
+    function put(term, value) {
+      if (!value) return;              // measured or absent, never invented
+      var dt = document.createElement("dt");
+      dt.textContent = term;
+      var dd = document.createElement("dd");
+      dd.textContent = value;
+      figures.appendChild(dt);
+      figures.appendChild(dd);
+    }
+
+    function render(data) {
+      figures.innerHTML = "";
+      problemList.innerHTML = "";
+
+      problems.hidden = !(data.problems && data.problems.length);
+      (data.problems || []).forEach(function (text) {
+        var li = document.createElement("li");
+        li.textContent = text;
+        problemList.appendChild(li);
+      });
+
+      if (data.ok) {
+        put("Videos", data.video_count + (data.video_count === 1 ? " video" : " videos"));
+        put("Length", data.duration_label);
+        put("Pictures", data.frame_count.toLocaleString());
+        put("Disk needed", data.disk_label);
+        put("Free on this disk", data.free_label);
+        put("Time", data.time_label);
+        put("Estimated cost", data.cost_label);
+        put("Stops at", data.budget_label);
+      }
+
+      // Said in both directions. An absent reassurance reads as a hedge.
+      leaves.textContent = data.leaves || "";
+      // Plain `.note` is the accent-bordered one, which is the right weight for
+      // "something is about to be sent". Neutral for "nothing leaves".
+      leaves.className = data.leaves_anything ? "note" : "note note-neutral";
+      leaves.hidden = !data.leaves;
+
+      if (data.ok && !data.time_label) {
+        state.textContent =
+          "How long this takes is not predictable yet — nothing comparable has "
+          + "finished on this computer to measure against.";
+      } else if (data.ok) {
+        state.textContent = "Measured on this computer. Times are approximate.";
+      } else {
+        state.textContent = "";
+      }
+
+      panel.hidden = false;
+    }
+
+    function refresh() {
+      var body = new URLSearchParams();
+      body.set("paths", form.querySelector("#job-paths").value);
+      var interval = form.querySelector('input[name="interval"]:checked');
+      body.set("interval", interval ? interval.value : "2000");
+      var provider = form.querySelector('input[name="provider"]:checked');
+      body.set("provider", provider ? provider.value : "none");
+      var service = form.querySelector('input[name="service"]:checked');
+      body.set("service", service ? service.value : "");
+      var model = document.getElementById("chosen-model");
+      body.set("model_id", model ? model.value : "");
+
+      if (!body.get("paths").trim()) { panel.hidden = true; return; }
+
+      var ticket = ++inFlight;
+      panel.hidden = false;
+      state.textContent = "Checking the files…";
+
+      fetch("/api/plan", { method: "POST", body: body })
+        .then(function (r) {
+          if (r.status === 404) {
+            throw new Error(
+              "This needs the application restarted — the screen is newer than "
+              + "the program running it."
+            );
+          }
+          if (!r.ok) throw new Error("Those files could not be checked (" + r.status + ").");
+          return r.json();
+        })
+        .then(function (data) {
+          // A slow reply for a set of files the user has since changed must not
+          // overwrite the answer for the files they are looking at now.
+          if (ticket !== inFlight) return;
+          render(data);
+        })
+        .catch(function (error) {
+          if (ticket !== inFlight) return;
+          figures.innerHTML = "";
+          leaves.hidden = true;
+          problems.hidden = true;
+          state.textContent = error.message;
+        });
+    }
+
+    function schedule() {
+      window.clearTimeout(timer);
+      // Probing runs ffprobe over every chosen file, so this waits for the user
+      // to stop changing their mind rather than firing on each keystroke.
+      timer = window.setTimeout(refresh, 400);
+    }
+
+    form.addEventListener("change", schedule);
+    form.addEventListener("input", schedule);
+    // The picker writes paths into the textarea directly, which fires no event.
+    var observed = document.getElementById("chosen-list");
+    if (observed && window.MutationObserver) {
+      new MutationObserver(schedule).observe(observed, { childList: true });
+    }
+  })();
 </script>
 {% endblock %}
 {% block content %}
@@ -398,9 +530,41 @@
     </p>
   </fieldset>
 
+  {#
+    What pressing start would actually do, before it is pressed.
+
+    Everything in here is measured or absent: frame counts and disk come from
+    probing the files, durations from finished stages on this machine. A row
+    with nothing behind it is not rendered — an invented figure is worse than a
+    missing one, because someone plans an afternoon around it.
+
+    The "what leaves this computer" line is never omitted in either direction.
+    It is the claim the product rests on, and the moment someone is deciding
+    whether to believe it is exactly this one.
+  #}
+  <section id="plan" class="panel" hidden
+           style="margin-top:var(--space-6)" aria-live="polite">
+    <h4 style="margin:0 0 var(--space-1)">What you'll get</h4>
+    <p class="text-muted" style="font-size:12px;margin:0 0 var(--space-3)" id="plan-state"></p>
+
+    <div id="plan-problems" hidden role="alert"
+         style="border-left:3px solid var(--color-accent);padding-left:var(--space-3);margin-bottom:var(--space-3)">
+      <ul style="margin:0;padding-left:var(--space-4);font-size:13px" id="plan-problem-list"></ul>
+    </div>
+
+    <dl class="plan-grid" id="plan-figures"></dl>
+
+    <p class="note" id="plan-leaves" style="margin-top:var(--space-3)"></p>
+  </section>
+
   <div style="margin-top:var(--space-6);display:flex;gap:var(--space-2)">
     <button class="btn btn-primary" type="submit">Check and continue</button>
     <a class="btn btn-secondary" href="/">Cancel</a>
   </div>
+
+  <p class="text-muted" style="font-size:12px;margin-top:var(--space-3)">
+    The same job from a terminal:
+    <code class="mono">video-to-llm process &lt;video&gt;</code>
+  </p>
 </form>
 {% endblock %}
