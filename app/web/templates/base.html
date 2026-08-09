@@ -19,10 +19,13 @@
   <header class="topbar">
     <div class="brand">VIDEO&nbsp;&rarr;&nbsp;LLM</div>
 
-    <div class="localbadge">
+    {# The badge makes the claim the whole product rests on, and for three
+       sessions there was nowhere to click to find out what it rested on. A
+       promise with no way to check it is a slogan. #}
+    <a class="localbadge" href="/privacy">
       <span class="square" aria-hidden="true"></span>
       <span>Runs only on this computer &mdash; nothing is uploaded</span>
-    </div>
+    </a>
 
     <div class="topbar-right">
       <span class="status {{ worker.css_class }}">

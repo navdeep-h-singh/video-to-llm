@@ -198,6 +198,7 @@ def client(tmp_path):
 SCREENS = [
     "/",
     "/launch",
+    "/privacy",
     "/jobs/new",
     "/imports",
     "/settings",

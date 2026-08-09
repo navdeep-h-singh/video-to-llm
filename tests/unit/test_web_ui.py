@@ -83,7 +83,16 @@ def seed_job(connection, *, job_id="j1", name="Session review", status="complete
 
 @pytest.mark.parametrize(
     "path",
-    ["/", "/launch", "/jobs/new", "/imports", "/settings", "/collections", "/collections/new"],
+    [
+        "/",
+        "/launch",
+        "/privacy",
+        "/jobs/new",
+        "/imports",
+        "/settings",
+        "/collections",
+        "/collections/new",
+    ],
 )
 def test_every_top_level_screen_renders(client, db, path):
     seed_job(db)
@@ -202,7 +211,7 @@ def test_settings_states_where_keys_live_without_showing_them(client):
 # ── Plain language before opt-in ──────────────────────────────────────────
 
 
-LOCAL_ONLY_SCREENS = ["/", "/launch", "/jobs/new", "/imports", "/collections"]
+LOCAL_ONLY_SCREENS = ["/", "/launch", "/privacy", "/jobs/new", "/imports", "/collections"]
 
 
 @pytest.mark.parametrize("path", LOCAL_ONLY_SCREENS)

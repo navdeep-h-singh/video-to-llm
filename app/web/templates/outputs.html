@@ -15,6 +15,83 @@
   </div>
 </div>
 
+{#
+  What this job did — the other half of the panel on the new job screen.
+
+  That one promises; this one reports. Keeping them the same shape is the point:
+  you were told 1,488 pictures and nothing uploaded, and here is 1,488 pictures
+  and nothing uploaded. Without it the Files screen answered "what exists" and
+  never "what happened", which is what someone opens it to find out.
+
+  Every row is omitted when its value is unknown. The token figures say they are
+  estimates because they are — a character ratio, not a real tokenisation.
+#}
+{% if receipt and receipt.has_anything %}
+<div class="panel">
+  <div class="panel-head"><h4 style="margin:0">What this job did</h4></div>
+
+  <dl class="plan-grid">
+    <dt>Video</dt>
+    <dd>
+      {{ receipt.videos | join(", ") }}
+      {%- if receipt.length_label %} · {{ receipt.length_label }}{% endif %}
+    </dd>
+
+    {% if receipt.interval_label %}
+    <dt>Pictures</dt><dd>{{ receipt.interval_label }}</dd>
+    {% endif %}
+
+    {% if receipt.described_label %}
+    <dt>Descriptions</dt>
+    <dd>
+      {{ receipt.described_label }}
+      {%- if receipt.described_by %} · {{ receipt.described_by }}{% endif %}
+    </dd>
+    {% endif %}
+
+    {% if receipt.took_label %}
+    <dt>Took</dt><dd>{{ receipt.took_label }}</dd>
+    {% endif %}
+
+    {% if receipt.finished_at %}
+    <dt>Finished</dt><dd>{{ receipt.finished_at }}</dd>
+    {% endif %}
+
+    {% if receipt.document_size %}
+    <dt>The document</dt>
+    <dd>
+      {{ receipt.document_size }}
+      {%- if receipt.document_tokens %} · about {{ "{:,}".format(receipt.document_tokens) }} tokens{% endif %}
+    </dd>
+    {% endif %}
+
+    {% if receipt.saving_label and receipt.frames_tokens %}
+    <dt>Instead of the pictures</dt>
+    <dd>
+      about {{ "{:,}".format(receipt.frames_tokens) }} tokens —
+      <strong>{{ receipt.saving_label }} smaller</strong> this way
+    </dd>
+    {% endif %}
+  </dl>
+
+  <p class="note {{ '' if receipt.anything_left else 'note-neutral' }}"
+     style="margin-top:var(--space-3)">{{ receipt.left_machine }}</p>
+
+  {% if receipt.document_tokens %}
+  <details style="margin-top:var(--space-2)">
+    <summary style="font-size:13px;cursor:pointer">How the token figures are worked out</summary>
+    <p class="text-muted" style="font-size:13px;margin-top:var(--space-2)">
+      Both numbers are estimates, not a real tokenisation, which is specific to
+      each model. The document is counted at roughly 3.6 characters per token.
+      The comparison assumes each picture costs about {{ "{:,}".format(1393) }}
+      tokens on a tile-based vision model — that is the realistic alternative,
+      because most services accept no video at all and would need the pictures.
+    </p>
+  </details>
+  {% endif %}
+</div>
+{% endif %}
+
 <div class="panel">
   {% if files %}
   <table class="table">
@@ -62,6 +139,17 @@
   </table>
   {% else %}
     {{ empty("No files yet.", "They appear here as the job produces them.") }}
+  {% endif %}
+
+  {# Only shown where a real equivalent exists. A hint pointing at a command
+     that does not do this would be worse than no hint. #}
+  {% if files %}
+  <p class="text-muted" style="font-size:12px;margin:var(--space-4) 0 0">
+    From a terminal: <code class="mono">video-to-llm export "&lt;job&gt;" --format srt</code>
+    for subtitles or other formats, and
+    <code class="mono">video-to-llm show "&lt;job&gt;" 00:12:34</code>
+    to see what was happening at a moment and which picture came from it.
+  </p>
   {% endif %}
 </div>
 

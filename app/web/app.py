@@ -1082,14 +1082,18 @@ def create_app(settings: Settings) -> FastAPI:
         from app.web.files import directory_size, friendly_name
 
         connection = connect()
+        from app.services.receipt import Receipt, build_receipt
+
         files: list[dict[str, Any]] = []
         reclaimable: list[dict[str, Any]] = []
         busy = ""
         total_bytes = 0
         root = current().output_root
+        receipt = Receipt()
 
         try:
             if connection is not None:
+                receipt = build_receipt(connection, root, job_id)
                 rows = connection.execute(
                     "SELECT * FROM artifacts WHERE job_id = ? ORDER BY relative_path",
                     (job_id,),
@@ -1145,6 +1149,7 @@ def create_app(settings: Settings) -> FastAPI:
             "dashboard",
             job_id=job_id,
             files=files,
+            receipt=receipt,
             reclaimable=reclaimable,
             reclaim_blocked=busy,
             total_size=status_module.format_bytes(total_bytes),
@@ -2518,6 +2523,65 @@ def create_app(settings: Settings) -> FastAPI:
         )
         logger.info("Started a background worker on request")
         return RedirectResponse("/settings", status_code=303)
+
+    @app.get("/privacy", response_class=HTMLResponse)
+    def privacy(request: Request) -> Response:
+        """Where the badge in the header is cashed.
+
+        The badge has promised "nothing is uploaded" since the first screen was
+        built, and there was nowhere to click to find out what that rested on.
+        A claim with no way to check it is a slogan.
+
+        Two halves: mechanisms, which are true of the program whatever you have
+        done with it, and state, which is read live from this machine. Nothing
+        here is written that cannot be checked.
+        """
+        from app.core.config import BIND_HOST, PROVIDER_LABELS
+        from app.credentials.store import credential_status
+
+        active = current()
+        provider = active.visual_analysis.provider
+        state: dict[str, Any] = {
+            "describing": provider not in {"none", ""},
+            "default_service": PROVIDER_LABELS.get(provider, provider),
+            "bind_address": f"{BIND_HOST}:{active.port}",
+            "pictures_sent": 0,
+            "jobs_that_sent": 0,
+            "videos_processed": 0,
+            "services_with_keys": [
+                PROVIDER_LABELS[name]
+                for name in PROVIDER_LABELS
+                if name != "ollama_local" and credential_status(name).present
+            ],
+        }
+
+        connection = connect()
+        if connection is not None:
+            try:
+                # Counted from the work that actually ran, not from what was
+                # configured: a job set to a service and cancelled before its
+                # first batch sent nothing, and must not be reported as if it had.
+                row = connection.execute(
+                    "SELECT COALESCE(SUM(s.items_done), 0) AS pictures,"
+                    " COUNT(DISTINCT j.id) AS jobs FROM stage_runs s"
+                    " JOIN job_videos v ON v.id = s.job_video_id"
+                    " JOIN jobs j ON j.id = v.job_id"
+                    " WHERE s.stage = 'visual' AND s.items_done > 0"
+                    " AND j.visual_provider NOT IN ('none', '', 'ollama_local')"
+                ).fetchone()
+                state["pictures_sent"] = int(row["pictures"] or 0)
+                state["jobs_that_sent"] = int(row["jobs"] or 0)
+                state["videos_processed"] = int(
+                    connection.execute("SELECT COUNT(*) AS n FROM job_videos").fetchone()["n"] or 0
+                )
+            except sqlite3.Error:
+                # A page about trust must not fail to render because a count
+                # could not be read. The mechanisms below it are the substance.
+                logger.warning("Could not read privacy counters")
+            finally:
+                connection.close()
+
+        return page(request, "privacy.html", "", privacy=state)
 
     # ── What a job would produce, before it is started ────────────────────
 

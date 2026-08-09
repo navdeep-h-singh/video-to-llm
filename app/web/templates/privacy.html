@@ -1,0 +1,128 @@
+{% extends "base.html" %}
+{% block title %}What leaves this computer — Video to LLM{% endblock %}
+{% block content %}
+{#
+  The badge in the header makes a promise. This is where it is cashed.
+
+  Two halves, and the split is deliberate. The mechanisms are properties of the
+  program that are true whatever you have done with it — each one is enforced in
+  code and has a test that fails if it regresses. The state below is what is
+  true on *this* machine right now, read live. Neither is marketing copy: a line
+  that cannot be checked does not belong on this page.
+#}
+<div class="page-head">
+  <div>
+    <h1>What leaves this computer</h1>
+    <p class="page-sub">Nothing, unless you ask for it — and here is exactly how that works.</p>
+  </div>
+</div>
+
+<div class="panel">
+  <div class="panel-head"><h4 style="margin:0">Right now, on this machine</h4></div>
+  <dl class="plan-grid">
+    <dt>Descriptions</dt>
+    <dd>
+      {% if privacy.describing %}
+        on by default — <strong>{{ privacy.default_service }}</strong>
+      {% else %}
+        <strong>off by default</strong>. A job that leaves them off makes no network request.
+      {% endif %}
+    </dd>
+
+    <dt>Pictures sent, ever</dt>
+    <dd>
+      {% if privacy.pictures_sent %}
+        {{ "{:,}".format(privacy.pictures_sent) }}
+        across {{ privacy.jobs_that_sent }} job{{ "" if privacy.jobs_that_sent == 1 else "s" }}
+      {% else %}
+        <strong>none</strong> — no job on this machine has sent anything to a service
+      {% endif %}
+    </dd>
+
+    <dt>Videos processed</dt>
+    <dd>{{ "{:,}".format(privacy.videos_processed) }}, none of them copied, moved, or uploaded</dd>
+
+    <dt>Keys stored</dt>
+    <dd>
+      {% if privacy.services_with_keys %}
+        {{ privacy.services_with_keys | join(", ") }} — held in this computer's secure store
+      {% else %}
+        none
+      {% endif %}
+    </dd>
+
+    <dt>Address</dt>
+    <dd class="mono">{{ privacy.bind_address }} — reachable from this computer only</dd>
+  </dl>
+</div>
+
+<div class="panel">
+  <div class="panel-head"><h4 style="margin:0">How it is enforced</h4></div>
+  <p style="font-size:14px;margin-top:0">
+    Each of these is a property of the program, not a policy. Each has a test
+    that fails if it stops being true.
+  </p>
+  <ul style="font-size:14px;line-height:1.65;padding-left:var(--space-4)">
+    <li>
+      The interface binds <span class="mono">127.0.0.1</span>, and that is
+      asserted when the application is constructed. It cannot be configured to
+      listen anywhere else.
+    </li>
+    <li>
+      One check runs before every screen and every action: a request claiming a
+      different host is refused, and so is any write or read arriving from
+      another origin. Without it, a page you merely had open in another tab
+      could delete a job or start one that spends money.
+    </li>
+    <li>
+      No page loads anything from anywhere else — no fonts, no scripts, no
+      stylesheets, no images from a network. The badge in the header would be
+      false the moment one did.
+    </li>
+    <li>
+      Your source videos are read where they are. Nothing is copied, moved, or
+      altered.
+    </li>
+    <li>
+      Keys live in this computer's secure store — Keychain on a Mac, Credential
+      Manager on Windows, the Secret Service keyring on Linux. Where there is no
+      secure store, storing is refused rather than falling back to a file.
+      <strong>No key is ever shown back to you</strong>, not even the first few
+      characters, and none is written to the database, the logs, a manifest, an
+      export, or a collection.
+    </li>
+    <li>
+      There are no accounts, no sign-in, and nothing is measured or reported
+      about how you use this.
+    </li>
+    <li>
+      Describing on this computer never quietly becomes describing somewhere
+      else. There is no automatic fall back to a paid service.
+    </li>
+    <li>
+      When a service <em>is</em> chosen, it receives the numbered still pictures
+      and nothing else. Never the video file, never the audio, never the
+      transcript. You are shown the count and the estimated cost first, and the
+      run stops at a limit you set.
+    </li>
+  </ul>
+</div>
+
+<div class="panel">
+  <div class="panel-head"><h4 style="margin:0">Checking for yourself</h4></div>
+  <p style="font-size:14px;margin-top:0">
+    None of the above requires taking our word for it.
+  </p>
+  <ul style="font-size:14px;line-height:1.65;padding-left:var(--space-4)">
+    <li>Disconnect from the network and process a video. Everything works.</li>
+    <li>
+      Point a network monitor at this process. With descriptions off there is
+      nothing to see.
+    </li>
+    <li>
+      Read <span class="mono">docs/SECURITY.md</span> in the repository, which
+      lists what would count as a bug in any of this.
+    </li>
+  </ul>
+</div>
+{% endblock %}
