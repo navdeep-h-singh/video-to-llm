@@ -176,7 +176,11 @@ DESCRIPTION_PROVIDERS: tuple[str, ...] = (
 PROVIDER_LABELS: dict[str, str] = {
     "ollama_local": "On this computer",
     "anthropic": "Claude",
-    "google": "Google Gemini",
+    # "Google" rather than "Google Gemini": the company is stable, the product
+    # name is not, and a label that has to be edited every time a service is
+    # rebranded is a label that will eventually be wrong on screen. The model
+    # box already names the specific model, which is where that detail belongs.
+    "google": "Google",
     "openai": "OpenAI",
     "openai_compatible": "Another service (OpenAI format)",
     "anthropic_compatible": "Another service (Claude format)",

@@ -12,6 +12,8 @@ A failure here is a regression.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -185,22 +187,24 @@ def test_each_service_is_named_on_the_settings_screen(client):
         assert label in body, f"{provider} is not named on the settings screen"
 
 
-def test_a_service_is_named_even_when_the_route_supplies_no_label():
+def test_the_fallback_name_matches_the_shared_label_for_every_service():
     """Templates are re-read from disk per request; route code is not.
 
     So a server started before `label` existed serves this template against a
     context without it. That really happened: every service rendered as an
-    unnamed box. A screen must not depend on the route being the same age as the
-    template it renders.
+    unnamed box. The template therefore carries its own fallback — and a second
+    copy of the names is a second place for them to drift, which was proved the
+    moment "Google Gemini" became "Google" and both had to be edited.
+
+    Rendering each provider with no label and comparing against PROVIDER_LABELS
+    catches that drift without parsing the template.
     """
     from jinja2 import ChainableUndefined, Environment, FileSystemLoader, select_autoescape
 
+    from app.core.config import PROVIDER_LABELS
     from app.credentials.store import CredentialSource, CredentialStatus
     from app.web.app import TEMPLATE_DIR
 
-    # Chainable undefined so the *rest* of the page's context can be absent
-    # without obscuring the one thing under test: whether a service still gets a
-    # name when the route does not supply one.
     environment = Environment(
         loader=FileSystemLoader(str(TEMPLATE_DIR)),
         autoescape=select_autoescape(),
@@ -208,21 +212,61 @@ def test_a_service_is_named_even_when_the_route_supplies_no_label():
     )
     template = environment.get_template("settings.html")
 
-    # Deliberately no "label" key — the shape an older route produced.
-    stale = [
-        {
-            "provider": "anthropic",
-            "status": CredentialStatus(
-                provider="anthropic",
-                present=False,
-                source=CredentialSource.NONE,
-                detail="No key set.",
-            ),
-            "model": "",
-            "base_url": "",
-            "needs_address": False,
-        }
-    ]
+    for provider, label in PROVIDER_LABELS.items():
+        if provider == "ollama_local":
+            continue
+        stale = [
+            {
+                "provider": provider,
+                "status": CredentialStatus(
+                    provider=provider,
+                    present=False,
+                    source=CredentialSource.NONE,
+                    detail="No key set.",
+                ),
+                "model": "",
+                "base_url": "",
+                "needs_address": False,
+            }
+        ]
+        rendered = template.render(credentials=stale, secure_store=True)
 
-    rendered = template.render(credentials=stale, secure_store=True)
-    assert "Claude" in rendered, "an unlabelled service rendered with no name at all"
+        # The exact heading, not a substring. "Google Gemini" contains "Google",
+        # so a containment check passed against the very drift this exists to
+        # catch — the same imprecision that let a doubled "about" through
+        # earlier in this codebase.
+        heading = re.search(r'<div class="key-name">\s*<strong>(.*?)</strong>', rendered, re.S)
+        assert heading, f"{provider} rendered no heading at all"
+        assert " ".join(heading.group(1).split()) == label, (
+            f"{provider} falls back to {heading.group(1).strip()!r}, but the shared "
+            f"label is {label!r} — the template's copy has drifted"
+        )
+
+
+def test_the_screen_says_to_save_the_key_before_checking(client):
+    """The order is not guessable and the failure is misleading.
+
+    Check reads the *stored* key, so a key typed but not saved gets a refusal
+    that reads like a rejected key. The sequence is stated once at the top
+    rather than explained inside each row's error.
+    """
+    body = client.get("/settings").text
+
+    assert "Save a key first" in body
+    assert "which models it offers" in body
+
+
+def test_the_model_box_says_what_would_fill_it(client):
+    """ "Not chosen yet" restates what an empty box already shows. The useful
+    thing to say is the next step."""
+    body = client.get("/settings").text
+
+    assert "Save a key first, then press Check" in body
+    assert "Not chosen yet" not in body
+
+
+def test_the_job_screen_explains_the_same_sequence(client):
+    body = client.get("/jobs/new").text
+
+    assert "Save key" in body
+    assert "which models it offers" in body

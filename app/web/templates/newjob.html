@@ -328,6 +328,10 @@
     #}
     <div id="service-picker" hidden style="margin-top:var(--space-3)">
       <h5 style="margin:0 0 var(--space-2)">Which service?</h5>
+      <p class="text-muted" style="font-size:13px;margin:0 0 var(--space-2)">
+        For a service with no key yet: paste one and press Save key, then Check
+        to see which models it offers. Keys are kept on this computer.
+      </p>
       <div class="keys">
         {% for svc in services | default([], true) %}
         <div class="key-row" data-provider="{{ svc.provider }}"
@@ -370,7 +374,9 @@
               <label for="job-model-{{ svc.provider }}" style="font-size:12px">Model</label>
               <input class="input mono" id="job-model-{{ svc.provider }}" data-model
                      list="job-models-{{ svc.provider }}" value="{{ svc.model }}"
-                     placeholder="Not chosen yet" spellcheck="false">
+                     placeholder="{{ 'Press Check to list models, or type one' if svc.ready
+                                     else 'Save a key first, then press Check' }}"
+                     spellcheck="false">
               <datalist id="job-models-{{ svc.provider }}"></datalist>
             </div>
             <button class="btn btn-secondary" type="button" data-check-models>Check</button>

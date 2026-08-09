@@ -228,6 +228,17 @@
     audio. You see what will be sent and roughly what it costs before anything
     leaves this computer, and sending stops at your cap.
   </p>
+  {#
+    The order matters and is not guessable: Check reads the *stored* key, so a
+    key that has been typed but not saved gets a refusal that reads like a bad
+    key. Saying the sequence once, here, is cheaper than explaining it in each
+    row's error.
+  #}
+  <p style="font-size:14px;margin:var(--space-2) 0 0">
+    <strong>Save a key first.</strong> Then press Check, and that service will be
+    asked which models it offers &mdash; the Model box fills with real names to
+    choose from. You can also type a model name yourself if you already know it.
+  </p>
   <div class="keys">
     {% for entry in credentials %}
     <div class="key-row">
@@ -242,7 +253,7 @@
       #}
       <div class="key-name">
         <strong>{{ entry.label | default(
-          {'anthropic': 'Claude', 'google': 'Google Gemini', 'openai': 'OpenAI',
+          {'anthropic': 'Claude', 'google': 'Google', 'openai': 'OpenAI',
            'openai_compatible': 'Another service (OpenAI format)',
            'anthropic_compatible': 'Another service (Claude format)'}.get(
              entry.provider, entry.provider), true) }}</strong>
@@ -304,9 +315,16 @@
 
         <div class="field" style="margin:0;flex:1;min-width:220px">
           <label for="model-{{ entry.provider }}" style="font-size:12px">Model</label>
+          {#
+            The placeholder is the next step, not a description of emptiness.
+            "Not chosen yet" restates what an empty box already shows; the useful
+            thing to say is what would fill it.
+          #}
           <input class="input mono" id="model-{{ entry.provider }}" name="model_id"
                  list="models-{{ entry.provider }}" value="{{ entry.model }}"
-                 placeholder="Not chosen yet" spellcheck="false">
+                 placeholder="{{ 'Press Check to list models, or type one' if entry.status.present
+                                 else 'Save a key first, then press Check' }}"
+                 spellcheck="false">
           {# Populated by Check. Free text either way: a fixed catalogue would be
              wrong the week a service renames something. #}
           <datalist id="models-{{ entry.provider }}"></datalist>
