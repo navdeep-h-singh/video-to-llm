@@ -234,7 +234,7 @@ def test_the_new_job_screen_explains_the_local_default(client):
 def test_local_descriptions_report_no_provider_charge_not_zero(client, tmp_path):
     settings = Settings(
         visual_analysis=VisualAnalysisSettings(
-            enabled=True, provider="ollama_local", model_id="qwen2.5vl:7b"
+            enabled=True, provider="ollama_local", models={"ollama_local": "qwen2.5vl:7b"}
         )
     ).with_output_root(tmp_path / "out")
 
@@ -839,7 +839,7 @@ def describing_client(settings, describable):
     configured = replace(
         settings,
         visual_analysis=VisualAnalysisSettings(
-            enabled=True, provider="ollama_local", model_id="qwen2.5vl:7b"
+            enabled=True, provider="ollama_local", models={"ollama_local": "qwen2.5vl:7b"}
         ),
     )
     with TestClient(create_app(configured), base_url=LOOPBACK_BASE_URL) as test_client:

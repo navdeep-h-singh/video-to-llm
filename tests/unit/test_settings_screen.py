@@ -58,7 +58,7 @@ def test_settings_round_trip_through_a_file(tmp_path, monkeypatch):
             original.visual_analysis,
             enabled=True,
             provider="ollama_local",
-            model_id="qwen2.5vl:7b",
+            models={"ollama_local": "qwen2.5vl:7b"},
         ),
     )
     save_settings(configured, path=target)
@@ -133,7 +133,9 @@ def test_the_on_device_model_can_be_configured(client, settings_path):
     assert response.status_code == 303
     written = settings_path.read_text(encoding="utf-8")
     assert 'provider = "ollama_local"' in written
-    assert 'model_id = "qwen2.5vl:7b"' in written
+    # Filed under its own provider, not as one model shared by every service.
+    assert "[visual_analysis.models]" in written
+    assert 'ollama_local = "qwen2.5vl:7b"' in written
     assert "enabled = true" in written
 
 
@@ -534,7 +536,9 @@ def test_saving_one_section_leaves_the_others_alone(client, settings_path):
     assert "default_token_limit = 500000" in written, (
         "the describing form reset the collection defaults"
     )
-    assert 'model_id = "qwen2.5vl:7b"' in written
+    # Filed under its own provider, not as one model shared by every service.
+    assert "[visual_analysis.models]" in written
+    assert 'ollama_local = "qwen2.5vl:7b"' in written
 
 
 def test_the_spending_cap_can_be_set_from_the_interface(client, settings_path):

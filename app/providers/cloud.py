@@ -89,6 +89,55 @@ class CloudProvider:
     def _usage(self, body: dict[str, Any]) -> tuple[int | None, int | None]:
         return None, None
 
+    # ── Listing what this service offers ──────────────────────────────────
+    #
+    # Deliberately a separate, user-initiated call. A hardcoded dropdown goes
+    # stale the week a provider renames something, and inventing a list the
+    # service does not actually offer is the defect this codebase produces most
+    # often. Asking the service is the only answer that cannot drift.
+    #
+    # It sends no picture and no video — only a request for a catalogue — and it
+    # happens because someone pressed a button, never on page load.
+
+    def _models_endpoint(self) -> str:
+        return f"{self.base_url.rstrip('/')}/v1/models"
+
+    def _model_names(self, body: dict[str, Any]) -> list[str]:
+        return [str(item.get("id", "")) for item in body.get("data", []) if item.get("id")]
+
+    def list_models(self) -> list[str]:
+        """Model names this service reports, newest-looking first.
+
+        Raises the same provider errors as :meth:`describe`, so a bad key or an
+        unreachable address is reported in the same words here as it would be
+        mid-job — which is the point of checking before committing to a run.
+        """
+        key = self._key()
+        client = self._client()
+        close = self.client is None
+        try:
+            response = client.get(self._models_endpoint(), headers=self._headers(key))
+            if response.status_code in (401, 403):
+                raise PermanentProviderError(
+                    "This service refused the key. Check that it is correct and still active."
+                )
+            if response.status_code == 404:
+                raise PermanentProviderError(
+                    "This address did not offer a model list. Check the address is the "
+                    "service's API root."
+                )
+            response.raise_for_status()
+            names = self._model_names(response.json())
+        except httpx.HTTPError as error:
+            raise PermanentProviderError(
+                f"Could not reach this service. {redacted_exception_text(error)}"
+            ) from error
+        finally:
+            if close:
+                client.close()
+
+        return sorted(set(names))
+
     # ── The shared request path ───────────────────────────────────────────
 
     def describe(self, request: AnalysisRequest) -> AnalysisResult:
@@ -265,6 +314,21 @@ class GoogleProvider(CloudProvider):
         # proxies, and browser history.
         return {"x-goog-api-key": key, "content-type": "application/json"}
 
+    # Google does not publish an OpenAI-shaped /v1/models list: the catalogue
+    # lives at /v1beta/models and names entries "models/gemini-...".
+    def _models_endpoint(self) -> str:
+        return f"{self.base_url}/v1beta/models"
+
+    def _model_names(self, body: dict[str, Any]) -> list[str]:
+        names = []
+        for item in body.get("models", []):
+            name = str(item.get("name", ""))
+            if not name:
+                continue
+            # Offer the bare id, which is what generateContent expects.
+            names.append(name.removeprefix("models/"))
+        return names
+
     def _payload(self, request: AnalysisRequest) -> dict[str, Any]:
         parts: list[dict[str, Any]] = [
             {
@@ -352,11 +416,35 @@ class OpenAICompatibleProvider(OpenAIProvider):
         return f"{self.base_url.rstrip('/')}/v1/chat/completions"
 
 
+class AnthropicCompatibleProvider(AnthropicProvider):
+    """Any endpoint speaking the Anthropic messages shape.
+
+    The counterpart to :class:`OpenAICompatibleProvider`. Those two shapes are
+    what the industry actually settled on, and a great deal of what people run —
+    a gateway, a proxy, a hosted open model, an organisation's own deployment —
+    presents itself as one or the other. Offering only the OpenAI shape would
+    turn "point this at our internal Claude gateway" into a code change.
+
+    Inherits the request and response handling wholesale: the point of a
+    compatible endpoint is that the shape is identical. Only the address differs,
+    and it is required, so there is no default to accidentally send frames to.
+    """
+
+    name: str = "anthropic_compatible"
+    base_url: str = ""
+
+    def _endpoint(self) -> str:
+        if not self.base_url:
+            raise PermanentProviderError("No address is set for this service. Add one in Settings.")
+        return f"{self.base_url.rstrip('/')}/v1/messages"
+
+
 PROVIDERS: dict[str, type[CloudProvider]] = {
     "anthropic": AnthropicProvider,
     "google": GoogleProvider,
     "openai": OpenAIProvider,
     "openai_compatible": OpenAICompatibleProvider,
+    "anthropic_compatible": AnthropicCompatibleProvider,
 }
 
 

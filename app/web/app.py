@@ -28,10 +28,11 @@ from fastapi.responses import (
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
-from app.core.config import Settings, assert_loopback
+from app.core.config import CUSTOM_ENDPOINT_PROVIDERS, Settings, assert_loopback
 from app.core.db import database_path, open_database, utc_now
 from app.core.locks import claim_is_stale
 from app.core.logging import get_logger
+from app.providers.cloud import PROVIDERS, build_provider
 from app.services.doctor import run_doctor
 from app.web import status as status_module
 
@@ -69,6 +70,24 @@ def hostname_of(value: str) -> str:
     if candidate.count(":") == 1:
         candidate = candidate.split(":", 1)[0]
     return candidate
+
+
+def _with_entry(existing: dict[str, str], key: str, value: str) -> dict[str, str]:
+    """A copy of *existing* with *key* set, or removed when the value is blank.
+
+    Blank removes rather than storing an empty string, so "I cleared this field"
+    and "I never set this field" stay the same state. Two spellings of absence
+    is how a settings file starts disagreeing with the screen.
+    """
+    updated = dict(existing)
+    if not key:
+        return updated
+    cleaned = value.strip()
+    if cleaned:
+        updated[key] = cleaned
+    else:
+        updated.pop(key, None)
+    return updated
 
 
 def whole_number(raw: str, fallback: int = 0) -> int:
@@ -1574,6 +1593,7 @@ def create_app(settings: Settings) -> FastAPI:
         enabled: str = Form(""),
         provider: str = Form("none"),
         model_id: str = Form(""),
+        base_url: str = Form(""),
         endpoint: str = Form("http://127.0.0.1:11434"),
         batch_size: int = Form(1),
         acknowledged: str = Form(""),
@@ -1600,7 +1620,15 @@ def create_app(settings: Settings) -> FastAPI:
                 active.visual_analysis,
                 enabled=want_enabled,
                 provider=provider,
-                model_id=model_id.strip(),
+                # Filed under the provider being saved, leaving every other
+                # service's model untouched. Saving Claude's model must not
+                # silently become Gemini's.
+                models=_with_entry(active.visual_analysis.models, provider, model_id),
+                base_urls=_with_entry(
+                    active.visual_analysis.base_urls,
+                    provider if provider in CUSTOM_ENDPOINT_PROVIDERS else "",
+                    base_url,
+                ),
                 budget=BudgetSettings(
                     hard_limit_usd=max(0.0, hard_limit_usd),
                     # Carried through rather than offered as a choice: nothing
@@ -1633,6 +1661,74 @@ def create_app(settings: Settings) -> FastAPI:
         if problems:
             return _settings_page(request, problems=problems, draft=candidate)
         return RedirectResponse("/settings?saved=1#describing", status_code=303)
+
+    @app.post("/api/providers/models")
+    def list_provider_models(provider: str = Form(""), base_url: str = Form("")) -> JSONResponse:
+        """Ask a service what models it offers.
+
+        User-initiated, never on load. It sends no picture and no video — only a
+        request for a catalogue — and it doubles as the key check, because a
+        service that answers with a catalogue is one the key works against.
+
+        This is the alternative to a dropdown baked into the build, which would
+        be wrong the week a provider renames something, and to free text, which
+        makes the user the validator. Asking is the only answer that cannot
+        drift.
+        """
+        from app.core.redaction import redacted_exception_text
+        from app.credentials.store import credential_status
+        from app.providers.base import ProviderError
+
+        active = current()
+
+        if provider == "ollama_local":
+            from app.providers.ollama_local import OllamaLocalProvider
+
+            try:
+                models = OllamaLocalProvider(endpoint=active.ollama.endpoint).list_models()
+            except Exception as error:
+                return JSONResponse({"ok": False, "detail": redacted_exception_text(error)})
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "models": models,
+                    "detail": ""
+                    if models
+                    else "The local runtime is reachable but has no models installed yet.",
+                }
+            )
+
+        if provider not in PROVIDERS:
+            return JSONResponse({"ok": False, "detail": "Unknown service."})
+
+        if not credential_status(provider).present:
+            # Checked before the call rather than after a confusing 401: the key
+            # is the thing the user has to act on, and saying so costs nothing.
+            return JSONResponse(
+                {"ok": False, "detail": "Save a key for this service first, then check again."}
+            )
+
+        address = base_url.strip() or active.visual_analysis.base_url_for(provider)
+        if provider in CUSTOM_ENDPOINT_PROVIDERS and not address:
+            return JSONResponse(
+                {"ok": False, "detail": "This service needs an address before it can be checked."}
+            )
+
+        try:
+            adapter = build_provider(provider, **({"base_url": address} if address else {}))
+            models = adapter.list_models()
+        except ProviderError as error:
+            return JSONResponse({"ok": False, "detail": str(error)})
+        except Exception as error:
+            return JSONResponse({"ok": False, "detail": redacted_exception_text(error)})
+
+        return JSONResponse(
+            {
+                "ok": True,
+                "models": models,
+                "detail": "" if models else "The service replied but listed no models.",
+            }
+        )
 
     @app.post("/settings/check-local")
     def check_local_route(request: Request) -> Response:

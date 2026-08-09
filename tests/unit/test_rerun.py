@@ -461,7 +461,7 @@ def run_the_visual_stage(connection, root, job_video_id, provider):
             settings.visual_analysis,
             enabled=True,
             provider="ollama_local",
-            model_id="better-model",
+            models={"ollama_local": "better-model"},
         ),
     )
 

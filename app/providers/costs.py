@@ -50,6 +50,10 @@ BUILTIN_PRICING: dict[str, dict[str, float]] = {
         "output_tokens_per_image": 320,
     },
     "openai_compatible": dict(DEFAULT_ASSUMPTIONS),
+    # Same treatment as its OpenAI-shaped twin: an endpoint you host or proxy
+    # has no published price we could know, so the estimate is explicitly an
+    # assumption rather than a quote.
+    "anthropic_compatible": dict(DEFAULT_ASSUMPTIONS),
 }
 
 #: Providers that run on this computer and have no provider charge at all.

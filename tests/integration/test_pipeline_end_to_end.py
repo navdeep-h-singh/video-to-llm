@@ -376,7 +376,7 @@ def _visual_settings(tmp_path):
 
     return Settings(
         visual_analysis=VisualAnalysisSettings(
-            enabled=True, provider="ollama_local", model_id="qwen2.5vl:7b"
+            enabled=True, provider="ollama_local", models={"ollama_local": "qwen2.5vl:7b"}
         )
     ).with_output_root(tmp_path / "out")
 

@@ -36,6 +36,7 @@ ENV_VARS = {
     "google": "GOOGLE_API_KEY",
     "openai": "OPENAI_API_KEY",
     "openai_compatible": "OPENAI_COMPATIBLE_API_KEY",
+    "anthropic_compatible": "ANTHROPIC_COMPATIBLE_API_KEY",
 }
 
 #: Local Ollama has no credential of any kind. Not an empty one — none.

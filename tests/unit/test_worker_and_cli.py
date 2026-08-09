@@ -192,7 +192,7 @@ def test_local_provider_reports_no_charge_language(tmp_path):
 
     settings = Settings(
         visual_analysis=VisualAnalysisSettings(
-            enabled=True, provider="ollama_local", model_id="qwen2.5vl:7b"
+            enabled=True, provider="ollama_local", models={"ollama_local": "qwen2.5vl:7b"}
         )
     ).with_output_root(tmp_path)
     detail = run_doctor(settings).get("visual_analysis").detail
@@ -205,7 +205,7 @@ def test_external_provider_states_what_leaves_the_machine(tmp_path):
 
     settings = Settings(
         visual_analysis=VisualAnalysisSettings(
-            enabled=True, provider="anthropic", model_id="claude-sonnet-4-5"
+            enabled=True, provider="anthropic", models={"anthropic": "claude-sonnet-4-5"}
         )
     ).with_output_root(tmp_path)
     check = run_doctor(settings).get("visual_analysis")
@@ -429,7 +429,7 @@ def test_a_job_that_declined_descriptions_does_not_get_them(settings, db):
     globally_on = replace(
         settings,
         visual_analysis=VisualAnalysisSettings(
-            enabled=True, provider="anthropic", model_id="a-model"
+            enabled=True, provider="anthropic", models={"anthropic": "a-model"}
         ),
     )
     job = _job_row(db, provider="none")
@@ -458,7 +458,7 @@ def test_the_job_keeps_the_provider_it_was_created_with(settings, db):
     changed_since = replace(
         settings,
         visual_analysis=VisualAnalysisSettings(
-            enabled=True, provider="openai", model_id="something-else"
+            enabled=True, provider="openai", models={"openai": "something-else"}
         ),
     )
     job = _job_row(db, provider="ollama_local", model="qwen2.5vl:7b")

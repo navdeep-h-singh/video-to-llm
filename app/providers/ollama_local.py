@@ -214,6 +214,24 @@ class OllamaLocalProvider:
             if close:
                 client.close()
 
+    def list_models(self) -> list[str]:
+        """Models actually installed here, from the runtime's own catalogue.
+
+        The local counterpart to the cloud adapters' :meth:`list_models`. Same
+        contract, and the honest one: this asks what is installed rather than
+        offering a list of models the machine may not have pulled.
+        """
+        with self._client(HEALTH_TIMEOUT_SECONDS) as client:
+            try:
+                response = client.get(f"{self.endpoint}/api/tags")
+                response.raise_for_status()
+            except httpx.HTTPError as error:
+                raise PermanentProviderError(
+                    f"Could not reach the local runtime. {redacted_exception_text(error)}"
+                ) from error
+            names = [str(m.get("name", "")) for m in response.json().get("models", [])]
+        return sorted(n for n in names if n)
+
     def _probe_vision(self, client: httpx.Client, model: str) -> bool | None:
         """Try to confirm image support from the model's own metadata.
 

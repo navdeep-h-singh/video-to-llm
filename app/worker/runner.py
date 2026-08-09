@@ -200,14 +200,19 @@ class Worker:
         if not recorded:
             return self.settings
 
-        model = (job["visual_model_id"] or "").strip() or self.settings.visual_analysis.model_id
+        # The job's own model wins, filed under the job's own provider. Writing
+        # it into the map rather than over a single shared field is what keeps a
+        # job that chose Claude from being run against whatever model the global
+        # settings happen to name today.
+        visual = self.settings.visual_analysis
+        model = (job["visual_model_id"] or "").strip() or visual.model_for(recorded)
         return replace(
             self.settings,
             visual_analysis=replace(
-                self.settings.visual_analysis,
+                visual,
                 enabled=recorded != "none",
                 provider=recorded,
-                model_id=model,
+                models={**visual.models, recorded: model},
             ),
         )
 

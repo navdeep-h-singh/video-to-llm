@@ -147,13 +147,67 @@ class LocalGuardSettings:
     max_frames_per_run: int = 0
 
 
+#: Services that speak a documented API shape at an address you supply. Both
+#: exist because "OpenAI-compatible" and "Anthropic-compatible" are the two
+#: shapes the industry actually settled on, and a great deal of what people run
+#: — a gateway, a proxy, a hosted open model, a company's own deployment —
+#: presents itself as one or the other.
+CUSTOM_ENDPOINT_PROVIDERS = frozenset({"openai_compatible", "anthropic_compatible"})
+
+#: Every provider that describes pictures, in the order they are offered.
+DESCRIPTION_PROVIDERS: tuple[str, ...] = (
+    "ollama_local",
+    "anthropic",
+    "google",
+    "openai",
+    "openai_compatible",
+    "anthropic_compatible",
+)
+
+
 @dataclass(frozen=True, slots=True)
 class VisualAnalysisSettings:
     enabled: bool = False
     provider: str = "none"
-    model_id: str = ""
+
+    #: Which model each service should use, keyed by provider.
+    #:
+    #: This was a single string shared by every provider, which meant the model
+    #: was a property of the *application* rather than of the service — so
+    #: setting a Gemini model and then switching to Claude asked Anthropic for
+    #: ``gemini-2.5-flash``. Google quietly defaulted and the others failed at
+    #: request time with a confusing message. A model only means anything
+    #: relative to the service that offers it, so it is stored that way.
+    models: dict[str, str] = field(default_factory=dict)
+
+    #: Where a compatible endpoint lives, keyed by provider. Only meaningful for
+    #: :data:`CUSTOM_ENDPOINT_PROVIDERS`; the named services have fixed
+    #: addresses that are not the user's to change.
+    base_urls: dict[str, str] = field(default_factory=dict)
+
     budget: BudgetSettings = field(default_factory=BudgetSettings)
     local_guard: LocalGuardSettings = field(default_factory=LocalGuardSettings)
+
+    def model_for(self, provider: str | None = None) -> str:
+        """The model chosen for *provider*, or for the active one."""
+        return self.models.get(provider or self.provider, "")
+
+    def base_url_for(self, provider: str | None = None) -> str:
+        name = provider or self.provider
+        if name not in CUSTOM_ENDPOINT_PROVIDERS:
+            return ""
+        return self.base_urls.get(name, "")
+
+    @property
+    def model_id(self) -> str:
+        """The active provider's model.
+
+        Kept as a read-only property so the many call sites that ask a settings
+        object for "the model" keep working and keep meaning the right thing.
+        Assigning it is deliberately impossible: a single writable model is the
+        bug this map replaced.
+        """
+        return self.model_for()
 
 
 @dataclass(frozen=True, slots=True)
@@ -354,6 +408,28 @@ def _coerce(raw: str) -> Any:
         return raw
 
 
+def _provider_models(visual: dict[str, Any]) -> dict[str, str]:
+    """Read the per-provider model map, carrying an older file's single value.
+
+    ``model_id`` was one string for every service. Anyone upgrading has one in
+    their file and it belongs to whichever provider was selected when they wrote
+    it — so it is filed under that provider rather than discarded, and rather
+    than being applied to all of them, which would recreate the bug the map
+    exists to fix.
+    """
+    models = {
+        str(name): str(value)
+        for name, value in (visual.get("models") or {}).items()
+        if str(value).strip()
+    }
+
+    legacy = str(visual.get("model_id", "")).strip()
+    active = str(visual.get("provider", "none"))
+    if legacy and active not in {"none", ""} and active not in models:
+        models[active] = legacy
+    return models
+
+
 def load_settings(
     *,
     path: Path | None = None,
@@ -404,7 +480,12 @@ def load_settings(
         visual_analysis=VisualAnalysisSettings(
             enabled=bool(visual.get("enabled", False)),
             provider=str(visual.get("provider", "none")),
-            model_id=str(visual.get("model_id", "")),
+            models=_provider_models(visual),
+            base_urls={
+                str(k): str(v)
+                for k, v in (visual.get("base_urls") or {}).items()
+                if k in CUSTOM_ENDPOINT_PROVIDERS and str(v).strip()
+            },
             budget=BudgetSettings(
                 hard_limit_usd=float(visual.get("budget", {}).get("hard_limit_usd", 25.0)),
                 on_limit=str(visual.get("budget", {}).get("on_limit", "stop_and_ask")),
@@ -455,6 +536,16 @@ def _toml_value(value: Any) -> str:
     return f'"{escaped}"'
 
 
+def _toml_table(values: dict[str, str]) -> str:
+    """Render a flat string table, or nothing at all.
+
+    An empty table is written as no lines rather than as commented placeholders:
+    a key with an invented value is the kind of thing someone later uncomments
+    without meaning to.
+    """
+    return "".join(f"{key} = {_toml_value(value)}\n" for key, value in sorted(values.items()))
+
+
 def render_settings_toml(settings: Settings) -> str:
     """Render settings as TOML.
 
@@ -492,10 +583,18 @@ language = {_toml_value(settings.transcription.language)}
 # Off by default. A local-only job never touches this section.
 enabled = {_toml_value(visual.enabled)}
 # none | ollama_local | anthropic | google | openai | openai_compatible
+#      | anthropic_compatible
 provider = {_toml_value(visual.provider)}
-# Free text. Never validated against a fixed catalogue.
-model_id = {_toml_value(visual.model_id)}
 
+[visual_analysis.models]
+# One model per service, because a model name only means anything to the
+# service that offers it. Free text: never validated against a fixed
+# catalogue, which would go stale the week a provider renames something.
+{_toml_table(visual.models)}
+[visual_analysis.base_urls]
+# Only for the two "compatible" services, which by definition live wherever
+# you put them. The named services have fixed addresses.
+{_toml_table(visual.base_urls)}
 [visual_analysis.budget]
 # External providers only. A model on this computer has no provider charge.
 hard_limit_usd = {visual.budget.hard_limit_usd}
