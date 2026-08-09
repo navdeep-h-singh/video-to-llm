@@ -42,6 +42,22 @@ VISUAL_RESULTS_FILENAME = "visual_results.json"
 GAPS_FILENAME = "gaps.txt"
 BATCH_DIRNAME = "batches"
 
+# The confidence rubric is load-bearing and was added after the fact. The first
+# real workload — 1,479 frames of a 49-minute screencast — came back Low on
+# every single one, zero Medium and zero High, and that was read as the whole
+# feature having failed. It had not. The extracted content was largely correct:
+# the right instrument, the right timeframe, real price levels, legible text.
+# Only the confidence field was useless, and it was useless because the prompt
+# said no more than "Set confidence to Low whenever you are unsure" — against
+# which a cautious model is never fully sure, so Low is the correct answer every
+# time. The field measured nothing.
+#
+# Anchoring confidence to legibility gives the model something it can actually
+# assess from the picture in front of it. Same model, same frames, same
+# temperature: the five sampled frames moved to Medium and High.
+#
+# `tests/unit/test_visual_prompt.py` holds the guard. Changing the wording is
+# fine; removing the definition of what confidence *measures* is the regression.
 DEFAULT_PROMPT = """You are looking at numbered still pictures taken from a screen recording.
 Each picture has its number stamped in the top-left corner as "IDX nn".
 
@@ -60,7 +76,17 @@ Reply with ONLY a JSON array. No prose, no code fences.
 
 Use "Unknown" whenever you cannot read something reliably. Do not guess a value
 that is not legible: an honest "Unknown" is far more useful than a plausible
-invention. Set confidence to Low whenever you are unsure."""
+invention.
+
+Set confidence by how much of this picture you could actually read:
+
+  High    the main labels and values are crisp and you read them directly
+  Medium  you read the main content, but some smaller detail is unclear
+  Low     the picture is blurred, cut off, or mostly unreadable
+
+Confidence describes legibility, not how certain you feel in general. A clear
+screenshot you transcribed correctly is High even if you are unfamiliar with
+the subject."""
 
 
 @dataclass
