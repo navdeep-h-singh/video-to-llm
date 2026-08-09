@@ -2,7 +2,7 @@
 
 **For:** a fresh session with full context.
 **Repo:** `~/My Builds/Video Processor for LLMs`
-**State:** 1,174 tests passing · ruff, mypy, audit and smoke all clean · working
+**State:** 1,371 tests passing · ruff, mypy, audit and smoke all clean · working
 tree clean · nothing half-built. Confirm with `git log --oneline -1` and the
 commands in §2 — this file deliberately carries no hash of its own commit,
 because writing one changes it.
@@ -11,23 +11,32 @@ because writing one changes it.
 
 ## 0. Before anything else
 
-**The operator's server is running an older build.** It was started before the
-last several commits, and route code lives in process memory while templates
-reload from disk — so it is currently serving new templates against old routes.
-Restart it before judging anything by what the screen shows:
+**The application now tells you when it is out of date.** A banner appears on
+every screen when the Python on disk is newer than the running process. Believe
+it: templates reload per request and route code does not, so an updated
+application serves new screens from old routes. That drift cost three separate
+debugging sessions before the banner existed — see §6.
 
 ```bash
 pkill -f "video-to-llm start" && uv run video-to-llm start
 ```
 
 **`~/Documents/VideoToLLM` is production.** It holds a 13-video / 15h36m course
-and a 1h17m video with 2,307 frames, and a job may be mid-flight. Never point a
-test or an experiment at it. Use `tmp_path` or a scratch root.
+and `Trendlines Video` — 49:39, 1,488 pictures, now `completed_with_gaps` with
+1,479 described. Never point a test or an experiment at it. Use `tmp_path` or a
+scratch root.
 
-**`config/settings.toml` is the operator's real configuration** and is
-git-ignored, so it cannot be restored from git. Tests monkeypatch
-`app.core.config.settings_file`; anything else that saves settings will
-overwrite it. Back it up before touching a settings save by hand.
+**Settings moved.** They are no longer in the repo. The live file is:
+
+```
+~/Library/Application Support/VideoToLLM/settings.toml
+```
+
+`config/settings.toml` still exists and is still git-ignored, but nothing reads
+it once the new file exists — it was copied across, byte-identical, on first
+load. Tests monkeypatch `app.core.config.settings_file`; anything else that
+saves settings writes to the user location. `VIDEO_TO_LLM_CONFIG_FILE` overrides
+it, which is how a scratch instance avoids the real one entirely.
 
 ---
 
@@ -49,8 +58,9 @@ Built to `localhost_video_to_llm_with_ollama_and_collections_build_spec.md` (in
 is "Modernist": vermilion `#ec3013`, warm greys, zero border-radius,
 Archivo-style grotesque.
 
-**Immediate goal:** an investor demo. Everything is judged against "does this
-land in a live demo".
+**Immediate goal:** an investor demo, and the operator now intends to take it to
+production for a public audience. Everything is judged against "does this land
+in a live demo" *and* "would this survive a stranger using it".
 
 ---
 
@@ -66,16 +76,17 @@ uv run ruff format --check . && uv run ruff check . && uv run mypy app
 uv run python scripts/pre_publish_audit.py
 ```
 
-To try it end to end on a throwaway root:
+A throwaway instance that cannot touch the real settings or output:
 
 ```bash
-uv run video-to-llm --output-root /tmp/scratch start-ui   # then press "Try it with a generated sample"
-uv run video-to-llm --output-root /tmp/scratch run-worker --once
+SCRATCH=/tmp/vtl-scratch && rm -rf $SCRATCH && mkdir -p $SCRATCH
+VIDEO_TO_LLM_CONFIG_FILE=$SCRATCH/settings.toml \
+  uv run video-to-llm --output-root $SCRATCH start-ui --port 8799
+VIDEO_TO_LLM_CONFIG_FILE=$SCRATCH/settings.toml \
+  uv run video-to-llm --output-root $SCRATCH run-worker --once
 ```
 
-**If you change Python while a server is running, restart it.** Templates load
-from disk per request; route code does not. That drift has already caused one
-500 and one silently-broken layout.
+Then press "Try it with a generated sample".
 
 ---
 
@@ -84,7 +95,8 @@ from disk per request; route code does not. That drift has already caused one
 ```
 Browser (127.0.0.1 only)
    └── FastAPI + Jinja2 + plain CSS   app/web/
-         ├── SQLite WAL               app/core/db.py, migrations/ (001, 002)
+         ├── origin boundary          one middleware, before every route
+         ├── SQLite WAL               app/core/db.py, migrations/ (001–003)
          ├── artifacts on disk        app/core/artifacts.py
          └── separate worker process  app/worker/
                ├── FFmpeg + faster-whisper
@@ -94,14 +106,15 @@ Browser (127.0.0.1 only)
 | Area | Where |
 |---|---|
 | Config | `app/core/config.py`, `config/settings.example.toml` |
+| Staleness | `app/core/build.py` — is the running code older than the files |
 | Redaction | `app/core/redaction.py` — single home, applied at format time |
 | Locks | `app/core/locks.py` — file lock **and** DB claim |
-| Pipeline | `app/pipeline/` — probe, preflight, frames, audio, transcribe, visual, enrich, assemble, archive, finalize, rerun |
+| Pipeline | `app/pipeline/` — probe, preflight, frames, audio, transcribe, visual, enrich, assemble, archive, finalize, rerun, **progress** |
 | Providers | `app/providers/` — base, ollama_local, cloud, costs, retry |
 | Collections | `app/collections/` — model, tokens, build |
-| Sample clip | `app/services/sample.py` |
+| Services | `app/services/` — jobs, sample, doctor, smoke, importer, **estimate**, **cleanup** |
 | Web | `app/web/app.py` (routes), `templates/` (18), `static/tokens.css`, `files.py`, `status.py` |
-| Docs | `docs/` — 12 files incl. `FINAL_BUILD_REPORT.md` |
+| Docs | `docs/` — 12 files incl. `FINAL_BUILD_REPORT.md`, `SECURITY.md` |
 
 The database is authoritative for *state*; artifacts on disk are authoritative
 for *evidence*. When they disagree, reconciliation trusts the artifact.
@@ -115,22 +128,27 @@ Load-bearing, each tested, several are the product's actual pitch.
 1. **Localhost only.** Binding is asserted at app construction. No page loads an
    off-origin resource — no CDN, no webfont. The header badge promises "nothing
    is uploaded" and that must stay literally true.
-2. **A completed provider batch is never re-sent.** On a cloud provider this is
-   the difference between resuming and paying twice.
-3. **The budget is checked *before* sending**, never after.
-4. **Local never auto-falls-back to cloud.** That would ship frames off the
-   machine after the user chose to keep them on it.
-5. **Stopping never destroys finished work.** Cancel ≠ undo.
-6. **`Unknown` is preserved, never guessed.** Unparseable confidence → Low.
-7. **Order is never inferred** from filename, date, or content.
-8. **Collection source versions are immutable.** Reprocessing leaves existing
-   collections untouched.
-9. **A stored key is never rendered back** — not the value, not a prefix. Fields
-   are write-only. Storage refuses rather than falling back to a file.
-10. **Nothing is invented in the UI.** Empty states say so; no placeholder data.
+2. **Only our own pages can act.** One middleware refuses a foreign `Host` (421)
+   and a foreign origin on every write and every `/api/` read (403). See §5F.
+3. **A completed provider batch is never re-sent — across attempts, not just
+   within one.** This was false until this session and cost three hours of real
+   work. See §6.
+4. **The budget is checked *before* sending**, never after.
+5. **Local never auto-falls-back to cloud.**
+6. **Stopping never destroys finished work.** Cancel ≠ undo.
+7. **`Unknown` is preserved, never guessed.** Unparseable confidence → Low.
+8. **Order is never inferred** from filename, date, or content.
+9. **Collection source versions are immutable.**
+10. **A stored key is never rendered back** — not the value, not a prefix. Fields
+    are write-only. Storage refuses rather than falling back to a file.
+11. **Nothing is invented in the UI.** Empty states say so; no placeholder data.
     A control that changes no behaviour counts as invented.
-11. **Status = text + shape + colour**, never colour alone.
-12. **No API terminology before the user opts in.**
+12. **Status = text + shape + colour**, never colour alone.
+13. **No API terminology before the user opts in.** Enforced by a test over
+    `/`, `/launch`, `/jobs/new`, `/imports`, `/collections`; it has caught
+    "endpoint" and `api_key` leaking into markup.
+14. **A model belongs to the service that offers it**, never to the application.
+15. **An estimate is measured or absent, never guessed.**
 
 Contrast: the design's `#ec3013` is 3.76:1 on the page ground — fine for borders
 and marks, below the 4.5:1 a 14px label needs. Filled buttons use `accent-700`
@@ -140,184 +158,217 @@ and marks, below the 4.5:1 a 14px label needs. Filled buttons use `accent-700`
 
 ## 5. What has been built
 
-**Session one** fixed 19 of 24 UX-audit findings (`5a11a04` → `ba6aca8`): the
-frame viewer, file serving with both-sides symlink resolution, live progress,
-the file picker, API key entry, search/rename/delete, and a worker-recovery bug
-that had left the 13-video job idle for nine hours behind a claim held by a dead
-PID.
+Sessions one and two are in `git log`; their summaries are unchanged and the
+commit messages explain *why* rather than *what*. **Session three** (everything
+from `81bcf7a` onward) was a production-readiness audit followed by the fixes it
+found, then four rounds of feature work driven by the operator using the app.
 
-**Session two** (everything from `f1d5a32` onward) built the five pieces that had
-been left for design decisions, then swept the app for more of the same class of
-defect. `git log --oneline f1d5a32~1..` is the whole story, and each message
-explains why rather than what.
+### A. The audit (`81bcf7a`)
 
-### A. Collection wizard (F08 + F09)
+A full use-case map, an ideal-UX definition, and an end-to-end test plan with
+acceptance criteria, executed against a scratch root. Nineteen findings, all
+fixed in that commit. The three that mattered:
 
-Real numbered sections replace what was a decorative five-step header. Ordering
-is keyboard-first — the move buttons are the mechanism and drag is layered on
-top, so there is no path the mouse can take that the keyboard cannot. Moves are
-announced through a live region and focus follows the moved item. Order travels
-in an explicit field, never inferred. A version select per source makes pinning
-older output reachable.
+- **F-01/04/05 — no origin boundary.** Loopback binding keeps other *machines*
+  out and did nothing about other *origins*. A urlencoded form post is a CORS
+  "simple request": any page the user had open could delete a job with its
+  files, remove a stored key, or start a rerun that spends money. A hostname
+  rebound to 127.0.0.1 could read the replies too. `docs/SECURITY.md` had
+  documented the absence of authentication as safe *because* there was no remote
+  surface, which was the wrong premise.
+- **F-02 — deleting could destroy what it then refused to delete.** The route
+  removed the folder and *then* the row. `collection_sources` holds an
+  unqualified reference to `job_videos` on purpose, so the DELETE raised whenever
+  a collection cited the job — after the frames, transcript and assembled
+  document were already gone. The rollback restored the row, leaving the
+  dashboard listing a job whose every file had been erased, above an error page
+  promising nothing had been affected.
+- **F-03 — no in-flight guards.** Delete, describe and rerun all reached past a
+  running worker.
 
-The pre-build estimate runs the **real** `load_sources` + `build_packs` and
-writes nothing. Deliberately not a browser-side approximation: that would be a
-second implementation of the packing rule, and the day the two disagreed the
-form would be promising something the build then contradicted.
+The other sixteen: 404s answered 200; the picture jump box was one behind the
+caption under the image; hand-edited query parameters returned raw framework
+422s; an empty rename was swallowed; a reserve larger than the token limit was
+accepted and silently packed nothing; settings lived inside the installation.
 
-### B. The rest of the settings (F07)
+### B. Live progress (`81bcf7a`, `722d000`, `73535e1`, `b17cbd3`)
 
-Roughly twenty settings that existed only in TOML, grouped by what the person is
-deciding, with worker and concurrency knobs behind an Advanced disclosure.
+`items_total` and `items_done` were both written when a stage *finished*, so a
+stage in flight had no denominator and the bar sat at exactly 0% for its whole
+run. On the operator's 49-minute video that was twenty minutes indistinguishable
+from a hang; on 1,488 pictures it was most of a day.
 
-`output_root` **repoints and moves nothing**, says so, and is refused outright
-while a worker claim is held or a job is mid-flight. The database is created in
-the new folder immediately, or every screen reads as a fresh install. `port`
-saves and states plainly that it needs a restart.
+`app/pipeline/progress.py` publishes the size before the work starts and reports
+as it goes, throttled to two seconds and best-effort — a dropped tick costs a
+moment of staleness, raising out of a nine-hour transcription costs the
+transcription. **Progress is measured in the unit the user experiences**:
+transcription counts seconds of video covered, not speech segments, because
+segments run from a second to several minutes and any estimate built on them is
+wrong.
 
-**Not built, on purpose:** `on_limit` is not offered as a control. It is stored
-but no code path consults it. A test pins that saving does not rewrite it.
+Three defects were shipped inside this feature and found by the operator looking
+at the screen, not by the suite. See §6.
 
-### C. Targeted reruns (F12)
+### C. Resume across attempts (`569adc2`)
 
-Four scopes: every picture, low confidence only, unusable only, a range. Frames
-and the transcript are carried forward (hard-linked where the filesystem
-allows); descriptions outside the scope are kept verbatim, because they were
-already paid for. A version strip shows what each version produced and switches
-the active one. Offered from the review screen, where low confidence is noticed.
+`completed_batch_indexes` was scoped to one `stage_run_id`, but `_begin_stage`
+mints a fresh row per attempt — so a restarted worker saw none of the previous
+attempt's work. It discarded **562 completed pictures, three hours**, on the
+operator's real job, on advice from this session that the restart was safe.
 
-**Not built, on purpose:** "a new prompt or schema" as a scope. Changing the
-prompt changes what every field means, so mixing carried-forward descriptions
-with newly-prompted ones inside one version produces a document whose rows are
-not comparable. It needs a whole-video rerun and a schema-change story of its
-own.
+Now scoped to every attempt of the same stage on the same video, and skipped
+batches carry their descriptions back from disk rather than only incrementing a
+counter. A batch whose artifact will not load is described again rather than
+silently omitted.
 
-### D. Notifications (F21)
+### D. Providers (`ad9ec32`, `ab3e769`, `2c6fff3`, `fab89e3`)
 
-Always on, no permission: a `<title>` badge, and a "finished while you were
-away" banner backed by `jobs.completion_acknowledged_at` (migration 002) so it
-survives a restart and an overnight suspension. Opt-in: browser notifications,
-with permission requested from the tick itself and never on load; and a terminal
-bell from the worker, written to stderr only when stderr is a tty.
+**The model was one string shared by every provider**, so setting a Gemini model
+and switching to Claude asked Anthropic for `gemini-2.5-flash`. Now
+`visual_analysis.models` maps provider → model and `base_urls` does the same for
+the two endpoints that live wherever you put them. `model_id` survives as a
+read-only property; making it read-only is how mypy found both places still
+assigning it.
 
-**Not built, correctly:** no push service, no email, no menu-bar agent, no
-`launchd`. The spec excludes them and the localhost promise forbids them. A test
-asserts no notification path contains `serviceWorker`, `pushManager`, `mailto:`,
-or an `https://` URL.
+**Anthropic-compatible endpoints** were added alongside OpenAI-compatible ones.
+Five services total. **Models are discovered, not typed**: a Check button asks
+the service what it offers, which doubles as the key check.
 
-### E. Sample clip (F22)
+**The service is chosen where the job is created**, with inline key setup, and
+the chosen model travels with the job. Labels live in one place
+(`PROVIDER_LABELS`) and the settings template's fallback copy is pinned against
+it by a test.
 
-`app/services/sample.py` draws a 60-second scrolling bar chart in the product's
-vermilion, plus a tone with four deliberate silences so the transcript has
-silence markers to show. ~1.3 MB, ~2.4 s to draw, **nothing tracked in the
-repository**. Labelled generated test footage everywhere, via one shared macro.
+### E. Staleness detection (`7bb87e1`)
 
-Deliberately not `testsrc2`: colour bars give a description model nothing to
-say. The local model does describe the chart, at Low confidence — which
-conveniently makes the low-confidence rerun demonstrable on the sample itself.
+`app/core/build.py` compares the newest `.py` mtime against the fingerprint
+captured at `create_app()`. Only Python counts — templates and CSS are *meant*
+to change under a running server, and flagging those would advise a restart that
+changes nothing.
 
-Fresh install → press the button → 27 seconds → frames, transcript with silence
-markers, assembled document, viewer, contact sheet.
+### F. Finding, naming, and reclaiming (`6c45af1`)
+
+- A **Finished** sidebar entry, pointing at the `?state=finished` filter that had
+  existed all along with nothing linking to it.
+- **Output folders are named after the job** — `trendlines-video/`, not a UUID.
+  Slugified conservatively, checked against Windows reserved names on every
+  platform, falling back to the identifier when nothing usable survives, with a
+  counted suffix on collision. Stored in `jobs.output_dirname` (migration 003)
+  and never recomputed, because deriving it from the current name would move the
+  folder on rename. NULL means an older job keeping its identifier-named folder.
+- **Selective file removal** by kind, with sizes and what each removal costs.
+  Removing a job was all-or-nothing, which made 91 MB of scratch audio and the
+  1 MB document the run exists to produce the same decision.
+
+### G. Collection explainability (`598e59e`)
+
+The three numbers in "Choose the shape" had no units and no reason given. They
+now explain themselves, and a disclosure explains that the size figure is a
+**raw** estimate of the whole document — not a real tokenisation, and not the
+amount a model has to read. See §10 for the arithmetic behind that claim.
 
 ---
 
-## 6. The bug class this build keeps producing
+## 6. The bug classes this build keeps producing
 
-**Controls that look live and are wired to nothing.** Every one of these was
-invisible to the type checker, the linter, and the existing tests, and several
-were invisible on screen too. If you change UI here, assume this is the failure
-mode.
+**Controls wired to nothing** was session two's class and still applies. Session
+three added three more, and all three were found by the operator looking at a
+screen while the full suite was green.
 
-Found and fixed:
+### The display reads the wrong row
 
-- **`.pick` choice cards showed no selection.** The only selected-state rule
-  keyed off `[aria-pressed="true"]`, which nothing ever set — dead from when the
-  element was a `<button>`. Three screens; picking an option changed nothing.
-- **The job screen had no stop, rename, or delete.** An unclosed `{% if %}`
-  inside `{% block title %}` swallowed three panels into `<title>` — 1,705
-  characters of markup in a tab title. Every route existed and was tested at the
-  route level; none was reachable.
-- **The per-job description choice was decorative.** `jobs.visual_provider` was
-  recorded and displayed, but the worker read the *global* setting — so a job
-  created with "skip descriptions" described everything anyway. On a paid
-  provider that is money spent on work the user explicitly declined.
-- **The worker heartbeat only beat between jobs**, so it never beat during one.
-  A worker seven hours into 2,371 frames held a heartbeat from before the job
-  started: the header read "Stopped unexpectedly" while it worked perfectly, and
-  a second worker would have judged it dead and taken over the same output root.
-- **The sample clip was a still image.** `drawbox`'s `t` is the box *thickness*,
-  not the timestamp, so the "animated" bars were constants. Twenty sampled
-  frames, two distinct pictures, and no error anywhere.
-- **"Numbered copy" was offered when no numbered copies exist** (the default) —
-  broken image plus a caption about sending pictures to a model that never ran.
-- **The contact sheet crashed** on a job with no videos: the route's own
-  empty-state branch passed the template none of the values it needed.
-- **Every screen hard-reloaded every 5 s** whenever any job ran anywhere, wiping
-  forms mid-edit and resetting the frame viewer.
-- **`assembled.txt` reported "Pictures 0"** with 20 on disk — the header
-  labelled `len(descriptions)` as "Pictures".
-- Two `notfound.html` call sites did not pass `what`: "That  could not be
-  found".
+`_stage_progress` selected a stage's state with `ORDER BY id`, keeping the last.
+Ids are random hex, so "last" meant whichever attempt sorted highest — not a
+fact about time. A restarted worker left attempt 1 abandoned at no total, and
+the screen reported *that* while attempt 2 ran correctly beside it. The data was
+right and the read was wrong.
 
-**The tests added pin the class, not the instance.** Keep them:
+Now ordered by `attempt`, and `/api/progress` averages only the latest attempt
+per stage.
+
+### A containment assertion is not an equality assertion
+
+Three separate times a test passed against the exact defect it was written to
+catch:
+
+- `" left"` in the body passed against `"about about 7½ hours left"`.
+- `"https://"` anywhere on the page flagged a legitimate placeholder while the
+  test's real subject was notification paths.
+- `label in rendered` passed against the drift `"Google" → "Google Gemini"`,
+  because one contains the other.
+
+**Treat substring assertions as suspect.** Match the whole rendered value.
+
+### A test that never reached its subject
+
+Two tests created jobs against `/nonexistent/a.mp4`; preflight refused before
+any row was written, so they asserted on nothing. Two more read a form that only
+renders when there is something to collect, on an empty install. And one test
+wrote a real key into the operator's macOS Keychain, found only by noticing "Key
+set" on an unrelated screen.
+
+**Assert that the thing under test actually happened before asserting about it.**
+
+### The one that keeps costing hours
+
+**Templates reload from disk; route code does not.** Three incidents this
+session: every service on the settings screen lost its name; a Check button
+reported "Not Found"; and a restart recommended in good faith destroyed three
+hours of description work. §5E is the mitigation, not a cure.
+
+### Guards worth keeping
 
 | Guard | Where |
 |---|---|
+| Cross-origin writes and `/api/` reads are refused | `test_origin_boundary.py` |
+| A failed delete never destroys artifacts first | `test_delete_safety.py` |
+| A retried stage resumes rather than restarting | `test_resume_across_attempts.py` |
+| A stage in flight is visibly working | `test_stage_progress.py` |
+| An estimate ignores work this run did not do | `test_stage_progress.py` |
+| A model belongs to its own provider | `test_provider_models.py` |
+| The template's label fallback matches the shared one | `test_provider_models.py` |
+| A stale build says so, and a template edit does not | `test_stale_build.py` |
+| Folder names are safe on every platform | `test_job_files.py` |
+| A job's output stays in one folder | `test_job_files.py` |
 | No screen has markup in its `<title>` | `test_accessibility.py` |
-| Selection is expressible, and not by colour alone | `test_accessibility.py` |
 | Every screen renders with no videos / no artifacts / empty install | `test_web_ui.py` |
-| The sample must be seen to change over its length | `test_sample_clip.py` |
-| Saving one settings section leaves the others alone | `test_settings_screen.py` |
-| A rerun only sends the frames it was asked to | `test_rerun.py` |
-| The claim is refreshed while a stage runs | `test_worker_and_cli.py` |
-
-Swept and clean: no form posts to a nonexistent route, no label points at a
-missing id, no button lacks an accessible name, no link goes nowhere, every
-image resolves, traversal is refused, all 12 screens return 200.
 
 ---
 
 ## 7. Known limitations — carry these forward honestly
 
-- **CI has never executed.** The three-OS workflow exists and its steps are
-  verified locally, but there is no git remote, so GitHub Actions has never run.
+- **The descriptions on the one real run were worthless.** All 1,479 came back
+  `confidence: Low` — zero Medium, zero High — and the structured fields
+  disagree with themselves across consecutive frames of the same chart. On that
+  video the entire signal was in the 53 KB transcript. This is the single most
+  important open question in the product: the headline feature produced nothing
+  usable on its first real workload. Investigate before marketing descriptions,
+  and before assuming the local model choice or the prompt is sound.
+- **CI has never executed.** No git remote, so GitHub Actions has never run.
   **Windows and Linux are untested.** Everything was built on macOS (Apple
   Silicon). Platform-specific paths — symlink fallback, directory fsync, keyring
-  backends, the hard-link fallback in reruns — are written defensively and
-  unit-tested, nothing more. This is the largest untested surface by far.
+  backends, the hard-link fallback in reruns, the new folder-name slug — are
+  written defensively and unit-tested, nothing more.
 - **No cloud provider has ever been called.** By design: no test makes a paid
-  call. The four adapters are mock-verified against documented request/response
+  call. Five adapters are mock-verified against documented request/response
   shapes. **Local Ollama *is* verified live** against Ollama 0.32.6 +
-  `qwen2.5vl:7b`.
-- **Transcription accuracy is unmeasured.** The pipeline is tested end to end
-  with a stub speech model; real runs use faster-whisper `medium` on CPU.
-- **Describing the sample locally takes ~10 minutes**, not the ~27 seconds the
-  rest takes: `qwen2.5vl:7b` runs at roughly 28 s/frame here, and the sample is
-  20 frames. The sample job therefore *declines* descriptions; adding them is a
-  deliberate second step via "Describe again". Know this before demoing that
-  button live.
-- **Whisper hallucinates on the sample's tone.** The transcript opens with
-  "Thanks for watching!" — a known artefact of a speech model on non-speech
-  audio. Honest output, correct silence markers around it, but it looks odd on a
-  demo screen. Fixing it means synthesising speech or suppressing
-  low-probability segments; both are larger than they sound.
-- **`drawtext` is absent from this machine's FFmpeg** (Homebrew 8.1.2, no
-  libfreetype), so the sample carries no on-screen text and `visible_text` comes
-  back Unknown. `drawbox` here also has no `eval` option, and its `t` is
-  thickness — the scroll is done with `crop`, whose `t` really is time.
-- **`jobs.visual_provider` is `NOT NULL DEFAULT 'none'`**, so "deliberately
-  none" and "never set" are indistinguishable. Jobs created through `create_job`
-  always carry the right value; anything inserting jobs by raw SQL must set it
-  or the worker will skip descriptions.
-- **The event log grows without bound.** Fine now; would want pruning on a
-  machine processing thousands of videos.
+  `qwen2.5vl:7b`. The new `list_models` paths for cloud providers are therefore
+  unexercised against a real service.
+- **Transcription accuracy is unmeasured**, and Whisper hallucinates on the
+  sample's tone — the transcript opens with "Thanks for watching!".
+- **Describing locally runs at ~31 s/picture** on this machine, measured over
+  1,488 of them. The sample job therefore declines descriptions.
+- **`drawtext` is absent from this machine's FFmpeg**, so the sample carries no
+  on-screen text and `visible_text` comes back Unknown.
+- **The event log grows without bound.** Progress events are rate-limited to one
+  per ten minutes precisely so this feature does not make it worse, but the
+  underlying growth is unaddressed.
 - **`/settings` shells out to `ffmpeg -version` on every render** (capped at
-  10 s), so it can be slow under heavy load. Not a defect — the readiness check
-  is meant to be live — but it is why that page can stall during a busy job.
+  10 s), so it can be slow under heavy load.
 - **Latent, deliberately left alone:** eleven unused decorative classes in
-  `tokens.css` from the supplied design system, and four schema columns nothing
-  reads (`jobs.settings_json`, `stage_runs.output_version`,
-  `stage_runs.items_skipped`, `events.detail_json`).
+  `tokens.css`, and three schema columns nothing reads (`jobs.settings_json`,
+  `stage_runs.output_version`, `events.detail_json`). `stage_runs.items_skipped`
+  was the fourth and now carries the carried-forward count.
 
 ---
 
@@ -325,45 +376,73 @@ image resolves, traversal is refused, all 12 screens return 200.
 
 Roughly in order of value:
 
-1. **Rehearse the demo end to end on a clean root.** `rm -rf` a scratch folder,
-   point `--output-root` at it, press "Try it with a generated sample", then
-   walk dashboard → job → review → contact sheet → collection. Read §7 first so
-   the sample's two cosmetic quirks do not surprise you live.
+1. **Find out why every description came back Low confidence.** §7, first bullet.
+   Prompt, schema, model choice, or image quality — it is not yet known which,
+   and everything downstream of "describe the pictures" depends on the answer.
 2. **Get a git remote and let CI run.** Windows and Linux have never executed a
-   line of this.
-3. **Prune the event log**, if any machine will process thousands of videos.
-4. **A rerun with a changed prompt or schema**, if the versioning story needs to
-   go further — see §5C for why it was left out rather than bolted on.
-5. **Decide on the unused design-system CSS and the four dead columns** (§7).
-   Both are judgement calls that belong to the operator, not to a cleanup pass.
+   line of this, and the folder-name slug is new platform-specific surface.
+3. **Exercise one cloud provider for real**, on a small job with a low cap. The
+   adapters, the Check button, and the budget path have never met a real service.
+4. **Measure the token comparison across five or six videos** before any of §10
+   goes on a website. n=1, and a chart screencast is close to the best case.
+5. **Prune the event log.**
+6. **Decide on the unused design-system CSS and the three dead columns** (§7).
 
 ---
 
 ## 9. Working agreements that have served this build well
 
-- **Run it, don't just read it.** Almost every real bug in both sessions was
-  found by using the app or by scanning for a *class* of defect — none by
-  reading code linearly.
+- **Run it, don't just read it.** Every defect in session three that mattered was
+  found by using the app. The suite was green for all of them.
 - **When you find a bug, write the test that catches its class**, not the
-  instance. Then revert the fix and watch the test fail. Twice in this session a
-  test passed vacuously and only the revert exposed it.
+  instance. Then revert the fix and watch the test fail. This session that
+  practice caught four tests that would otherwise have passed vacuously,
+  including two written minutes earlier.
+- **Assert the whole value, not a substring.** See §6.
+- **Assert that the subject exists before asserting about it.** See §6.
+- **Never let a test touch the real machine.** Fake the keyring, redirect the
+  settings file, use `tmp_path`. One test stored a credential in the operator's
+  Keychain.
 - **Tests assert behaviour and say why.** Comments explain the failure being
   prevented, not what the line does.
-- **Verify against real artifacts** — a real JPEG served, a real traversal
-  refused, a real job created — not only mocks.
 - **Commit at each coherent milestone** with a message explaining *why*, and the
   bugs found along the way. Run format, lint, mypy, tests, audit, smoke first.
-- **Never weaken a check to make it pass.** When the pre-publish audit flagged a
-  credential-shaped literal in a test, the string was assembled at runtime
-  rather than adding the file to an exemption list.
-- **Masking ordinary data is not a safe failure.** A redaction false positive
-  once blanked every token count in every manifest.
-- **A control that changes no behaviour is a lie**, and it is the defect this
-  codebase produces most often. See §6.
+- **Never weaken a check to make it pass.** When a check fires on something
+  legitimate, make the check *more precise* rather than more permissive — the
+  `https://` placeholder became a match on fetch-causing positions, not a
+  removed assertion.
+- **A control that changes no behaviour is a lie**, and it remains the defect
+  this codebase produces most often.
 
 ---
 
-## 10. First message to send
+## 10. The token arithmetic, and what it is worth
+
+Measured on `video02trendlines.webm` — 49:39, 1360×768, 1,488 frames.
+
+| Route | Tokens |
+|---|---:|
+| Send the video itself (Gemini-style, 1 fps + audio) | 863,910 |
+| Extract frames yourself, send 1,488 images | 2,072,784 |
+| **This app — assembled document** | **316,503** |
+| This app — transcript only | 14,868 |
+
+Against sending frames — the realistic alternative, since Claude and OpenAI
+accept no video — the saving is **85%**. Against native video it is 63%, but the
+app samples at 2s where Gemini samples at 1s, so that comparison is not
+like-for-like and should not be quoted without the caveat.
+
+**Positioning advice given, and the reasoning:** lead with *process once, ask
+forever, nothing leaves your machine* rather than with token savings. Savings
+erode as context windows grow and video pricing falls; reusability, privacy and
+citable evidence do not. Use only the 85% figure, footnote the arithmetic, and
+avoid the transcript-only 99% — it is real, but it argues that the product's
+headline feature can be switched off with no loss, which is a conversation to
+have internally (§7, §8.1) before having it with customers.
+
+---
+
+## 11. First message to send
 
 > Read `HANDOFF.md`. The working tree is clean and everything is committed —
 > start by telling me what you understand the current state to be, and what you
