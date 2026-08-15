@@ -196,13 +196,21 @@ docker build -t video-to-llm .          # command line only, see the Dockerfile
 
 Carried here deliberately rather than left for you to discover.
 
-- **Screen descriptions are beta.** They work — on a 49-minute chart recording
-  the model read the right instrument, the right timeframe, and real values off
-  the screen — but their *accuracy* is unmeasured, and the structured fields are
-  still written for one domain (trading charts). On other content those fields
-  come back `Unknown` rather than wrong, but they are wasted. See
-  [`docs/DESCRIPTION_QUALITY.md`](docs/DESCRIPTION_QUALITY.md), which includes
-  the experiment and the plan.
+- **Screen descriptions are beta, and their structured fields are written for
+  one domain.** They work — on a 49-minute chart recording the model read the
+  right instrument, the right timeframe, and real values off the screen — but
+  five of the eight fields (`timeframe`, `currency_pair`,
+  `indicators_and_states`, `exact_action`, `setup_type`) describe trading
+  charts, and that is a deliberate choice rather than an oversight. **On any
+  other kind of video those five come back `Unknown`.** The model declines
+  rather than inventing, so the result is thin rather than wrong, and
+  `visible_text`, `visual_description` and `confidence` still apply to anything.
+  Accuracy is unmeasured either way. See
+  [`docs/DESCRIPTION_QUALITY.md`](docs/DESCRIPTION_QUALITY.md) for the
+  experiment behind this.
+
+  The transcript, the timeline and the citations are the parts that work on
+  every video. Judge the tool on those.
 - **Transcription accuracy is unmeasured**, and Whisper sometimes writes a line
   over silence — a transcript opening with "Thanks for watching!" is the model,
   not your video.

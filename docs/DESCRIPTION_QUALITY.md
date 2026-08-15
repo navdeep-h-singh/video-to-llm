@@ -118,7 +118,13 @@ something observable, and must not reinstate the old clause.
 - On an abstract test pattern with almost no text, the rubric still returns
   `Low`. That is the rubric working, not failing.
 
-## The second problem, not fixed
+## The second problem, raised and declined
+
+> **Decision, 15 August 2026: the schema stays as it is.** Generalising it was
+> proposed, costed, and declined by the operator. Everything below is kept as
+> the record of a road not taken — the analysis is still accurate, but it is no
+> longer a plan, and it should not be re-opened without being asked.
+
 
 **The schema is written for one domain.** Five of its eight content fields —
 `timeframe`, `currency_pair`, `indicators_and_states`, `exact_action`,
@@ -179,6 +185,10 @@ domain nobody anticipated.
   accuracy is unmeasured and local inference is slow (~31 s/frame).
 - The claim "the headline feature produced nothing usable" was wrong, and any
   marketing built on that pessimism should be revised.
-- The domain-specific schema **must** be addressed before a public launch, or
-  the general-purpose positioning will be contradicted by the tool's own output
-  on the first non-trading video anybody tries.
+- The domain-specific schema is **staying**, by decision. That has a marketing
+  consequence and it is better faced than discovered: on non-chart video, five
+  of the eight fields report `Unknown`, and a reader who tries a cooking video
+  will see it. The positioning should therefore rest on the transcript, the
+  timeline, and the citation loop — all of which are true of any video — and
+  treat structured description as a labelled extra rather than the headline.
+  The README already does this; keep it that way.

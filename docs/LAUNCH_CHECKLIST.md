@@ -156,25 +156,24 @@ number.
 
 ---
 
-## 5. The one product decision left
+## 5. The product decision — made
 
-**Generalise the description schema.** Five of the eight content fields describe
-forex charts. The model returns `Unknown` rather than hallucinating on other
-content, so it is wasteful rather than dangerous — but a general-purpose tool
-that asks a cooking video for its currency pair contradicts its own positioning
-on the first video anybody tries.
+**The description schema stays as it is.** Generalising the five trading-specific
+fields into per-job profiles was proposed and costed; the operator declined it on
+15 August 2026. It is not a pending item and should not be re-opened without
+being asked. The analysis is kept in
+[`DESCRIPTION_QUALITY.md`](DESCRIPTION_QUALITY.md) as a record of a road not
+taken.
 
-The recommended shape, with reasoning, is in
-[`DESCRIPTION_QUALITY.md`](DESCRIPTION_QUALITY.md): per-job profiles
-(`general`, `trading`, `slides`, `code`, `custom`), with the trading profile
-preserving today's behaviour exactly so the existing 15-hour corpus stays valid.
+One consequence to carry into the launch rather than discover during it: on video
+that is not a chart, `timeframe`, `currency_pair`, `indicators_and_states`,
+`exact_action` and `setup_type` come back `Unknown`. The model declines rather
+than inventing, so the output is thin, not wrong — but someone will try a cooking
+video, and the copy should not have promised otherwise.
 
-This was deliberately not done autonomously: it moves `FrameDescription`, the
-parser, `SCHEMA_VERSION`, the batch artifacts already on disk, `enrich.py`,
-`assemble.py`, and `review.html` together, and it deserves a decision rather
-than a side effect.
-
-**Do this before a public launch**, not after.
+Lead on what is true of any video: the timeline, the transcript with its marked
+silences, and the citation that resolves to a frame. Keep structured description
+where the README already has it — an opt-in extra, labelled beta.
 
 ---
 

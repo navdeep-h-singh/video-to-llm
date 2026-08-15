@@ -420,8 +420,23 @@ hours of description work. §5E is the mitigation, not a cure.
   — "Set confidence to Low whenever you are unsure", which a careful model
   satisfies by answering Low every time. A legibility rubric moved the same five
   sampled frames to four Medium and one High. Still open: **accuracy is
-  unmeasured**, and the schema is written for forex charts, which is a design
-  change with a migration attached and is not yet made.
+  unmeasured**.
+- **The description schema stays as it is — decided, not pending.** Five of the
+  eight content fields (`timeframe`, `currency_pair`, `indicators_and_states`,
+  `exact_action`, `setup_type`) describe trading charts, because the build spec
+  was written around a trading course. Generalising them into per-job profiles
+  was proposed, costed, and **declined by the operator on 15 August 2026**.
+  Do not re-open it without being asked.
+
+  What that means in practice, so nobody rediscovers it as a bug: on video that
+  is not a chart those five fields come back `Unknown`. The model declines
+  rather than inventing — verified against frames of a colour test pattern — so
+  this is wasted prompt and wasted columns, not wrong output. `visible_text`,
+  `visual_description` and `confidence` are true of any video and carry the
+  value on general content.
+
+  The reasoning against it is still in `docs/DESCRIPTION_QUALITY.md`; treat that
+  section as a record of a road not taken rather than a plan.
 - **CI has never executed.** No git remote, so GitHub Actions has never run.
   The matrix is now nine cells (3 OS × 3 Python) plus an installed-wheel job and
   a container build, none of which has run either.
@@ -445,6 +460,35 @@ hours of description work. §5E is the mitigation, not a cure.
   underlying growth is unaddressed.
 - **`/settings` shells out to `ffmpeg -version` on every render** (capped at
   10 s), so it can be slow under heavy load.
+- **One job at a time, and no way to jump the queue.** `claim_next_job` takes
+  the single oldest `ready` job (`app/worker/runner.py:178`) and `process_job`
+  does not return until every video in it is done. A job queued behind a long
+  one waits for the whole thing. Observed 2026-08-12: a 13-video job sat at
+  `ready` with `started_at` NULL while a one-video job ahead of it ground
+  through local descriptions, and only started when that job left the loop.
+  This is the pause bug's twin — both come from the worker treating a claimed
+  job as uninterruptible. See §8.
+- **Pausing a running job does nothing until its current video ends.**
+  `pause_job` writes `status='paused'` to `jobs` and `job_videos`
+  (`app/services/jobs.py:186-197`) and its docstring promises to "stop a job
+  after the current step". Nothing implements that promise: neither
+  `process_job` nor `process_video` re-reads `jobs.status` after claiming, and
+  the only in-loop check is `self.stopping` (`app/worker/runner.py:203`), which
+  is worker shutdown, not job pause. `grep -n paused app/worker/runner.py`
+  returns nothing. Two consequences, both seen live: frames keep going to the
+  model after the user asked it to stop — on a cloud provider that keeps
+  spending against the budget past the stop request — and the next
+  `_set_job_status` writes `analyzing` straight over `paused`
+  (`app/worker/runner.py:284-285`), so the pause silently evaporates and the
+  interface shows Paused over work that is still running.
+- **Deleting a job the worker is mid-flight on races the worker.** Observed
+  2026-08-12: deleting the running job removed its output folder, the next
+  stage write hit `IntegrityError: FOREIGN KEY constraint failed`, and the job
+  settled as `needs_attention` before the loop moved on. It self-recovered and
+  the queue drained correctly, so this is untidy rather than dangerous — but
+  the error is the worker discovering the deletion by crashing into it, not by
+  being told. Fixing the pause check above fixes this too, since both need the
+  same "re-read the row before writing to it" discipline.
 - **Latent, deliberately left alone:** eleven unused decorative classes in
   `tokens.css`, and three schema columns nothing reads (`jobs.settings_json`,
   `stage_runs.output_version`, `events.detail_json`). `stage_runs.items_skipped`
@@ -457,15 +501,16 @@ hours of description work. §5E is the mitigation, not a cure.
 `docs/LAUNCH_CHECKLIST.md` is the full list, sequenced. The short version, in
 order of value:
 
-1. **Get a git remote and let CI run.** Still the highest-value thing nobody can
-   do from a laptop. Nine test cells, an installed-wheel job, and a container
-   build have never executed. Expect Windows to surface something.
-2. **Generalise the description schema.** Five of the eight content fields
-   describe forex charts. The model returns `Unknown` rather than inventing, so
-   it is wasteful rather than dangerous, but a general-purpose tool that asks a
-   cooking video for its currency pair contradicts its own positioning on the
-   first video anybody tries. Recommended shape — per-job profiles, trading
-   preserved as one of them — is in `docs/DESCRIPTION_QUALITY.md`.
+1. **Make pause actually pause.** The worst thing in this list, and the only
+   *defect* among mostly gaps: the interface reports Paused over work that is
+   still running, and on a cloud provider it keeps spending past the stop
+   request. A control that reports a state it has not reached is worse than one
+   that is missing. Item 8 below specifies the fix; it also resolves the
+   delete-race and unblocks the queue, because all three are the same worker
+   assumption. Do it before anything else here.
+2. **Get a git remote and let CI run.** The highest-value thing nobody can do
+   from a laptop. Nine test cells, an installed-wheel job, and a container build
+   have never executed. Expect Windows to surface something.
 3. **Exercise one cloud provider for real**, on a small job with a low cap. The
    adapters, the Check button, and the budget path have never met a real service.
    `test_readme_claims.py` refuses to let the README say otherwise until this
@@ -478,6 +523,60 @@ order of value:
    `High` reading is *correct* is untested.
 6. **Prune the event log.**
 7. **Decide on the unused design-system CSS and the three dead columns** (§7).
+8. **Make the worker interruptible, then let several jobs run at once.** Two
+   steps, in this order — the second is unsafe without the first.
+
+   **Step one: honour the control the interface already offers.** The worker
+   treats a claimed job as uninterruptible, which is why pause does nothing and
+   why a deletion arrives as a foreign-key crash (§7). Re-read `jobs.status`
+   between videos in `process_job` and between stages in `process_video`, and
+   make `_set_job_status` refuse to write over a `paused` or `cancelled` row
+   rather than clobbering it. The visual stage runs in frame batches, so check
+   there too — that is what makes a pause feel immediate on the long jobs this
+   product is built for, instead of arriving thirty seconds later. Worth a test
+   that pauses a job mid-stage and asserts both that the work stops and that
+   the row still reads `paused` afterwards; today neither holds.
+
+   **Step two: more than one job at a time.** The obvious shape is N worker
+   loops over the same output root, but the claim is the hard part, not the
+   loop. `claim_next_job` reads and the caller writes `preparing` in a separate
+   statement, so two workers can select the same row — it needs to become one
+   atomic claim (`UPDATE ... WHERE status='ready'` returning the claimed id)
+   under the existing `BEGIN IMMEDIATE` discipline. Then the ownership model
+   has to change with it: `worker.lock` currently claims *the output root*, and
+   the takeover-a-stale-claim path (`app/core/locks.py`) is written on the
+   assumption that a second live worker is the thing it exists to prevent.
+   Per-job claims with their own heartbeats, not one root-level claim.
+
+   Two constraints that are easy to lose here. Concurrency must stay bounded by
+   something real — local description already runs at ~31 s/picture on one job,
+   and two jobs against the same Ollama endpoint will contend for it rather
+   than go twice as fast, so the useful default is probably still 1 with an
+   explicit opt-in. And the budget cap is per-job today; two jobs billing the
+   same provider in parallel need a shared ceiling, or the cap means less than
+   it says it does.
+
+### Kept for near-term consideration, not scheduled
+
+Raised, thought about, and deliberately not started. Recorded here so the next
+session inherits the thinking rather than the idea — and so none of them is
+mistaken for a defect.
+
+| | What | Why it is worth doing | Why it is not started |
+|---|---|---|---|
+| **Interface** | Stage progress in the user's words — "Reading the audio, 12 of 40 minutes covered" rather than a stage name | The numbers are already published; only the wording is missing. Cheapest remaining interface win | Proposed alongside the pre-run panel and the receipt; those two were chosen first |
+| **Interface** | `/settings` caches `ffmpeg -version` instead of shelling out per render | It is capped at 10 s, so a slow machine makes the settings screen feel broken | Small, uncontroversial, nobody has been blocked by it |
+| **Input** | Optional URL input via `yt-dlp`, behind an extra | Every comparable tool takes a URL; "local files only" reads as unfinished rather than deliberate to a drive-by visitor. The privacy claim survives — yt-dlp fetches *to* your disk | Cut from scope deliberately. Revisit only if the launch shows people bouncing off it |
+| **Feature** | `video-to-llm watch <dir>` — process anything dropped into a folder | One sentence sells it to the self-hosting audience | P2. Better as an issue that attracts a contributor than as code nobody asked for |
+| **Feature** | `video-to-llm search "<phrase>"` across processed jobs | Turns an output folder into a library. Arguably the feature that makes the corpus feel like an asset | P2, and the largest of these |
+| **Feature** | Speaker diarisation | The most-requested feature in every adjacent project's tracker | P2, and a real dependency decision |
+| **Feature** | Context-pack presets named for model windows rather than a raw token number | The number is already explained; the preset is a nicety | P2 |
+| **Docs** | Host `docs/` as a site | Twelve genuinely good files nobody will click through GitHub's file browser to read | Needs the repository to exist first |
+
+Three more live in `docs/LAUNCH_CHECKLIST.md` rather than here, because none of
+them is a code change: the `OWNER` placeholder in seven files, the repository
+settings to paste in, and the demo recording. The container image is there too —
+it has never been built, because this machine has no Docker.
 
 ---
 
