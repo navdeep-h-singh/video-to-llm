@@ -43,6 +43,43 @@ from app.worker.reconcile import reconcile
 logger = get_logger(__name__)
 
 
+#: Statuses that mean the user asked this job to stop. The worker re-reads the
+#: job row to find them, because they are written by the interface on a
+#: different connection while a stage is already running.
+HALTING_JOB_STATES = ("paused", "cancelled")
+
+#: The three status writes the worker makes while a job runs, each refusing to
+#: move a job or video the user has stopped. Written out rather than built from
+#: the tuple above so the queries stay plain literals; `test_worker_pause.py`
+#: asserts the two agree, which is what keeps them from drifting apart.
+_HALTED_SQL = "('paused', 'cancelled')"
+_SET_VIDEO_STATUS = (
+    "UPDATE job_videos SET status = ?, updated_at = ? WHERE id = ?"
+    " AND status NOT IN ('paused', 'cancelled')"
+)
+_SET_JOB_STATUS = (
+    "UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?"
+    " AND status NOT IN ('paused', 'cancelled')"
+)
+_START_JOB = (
+    "UPDATE jobs SET status = ?, started_at = COALESCE(started_at, ?), updated_at = ?"
+    " WHERE id = ? AND status NOT IN ('paused', 'cancelled')"
+)
+
+
+class JobHalted(Exception):
+    """Raised inside a job when the user paused or cancelled it.
+
+    Not a failure: the work already done is kept and the job keeps the status
+    the user asked for, rather than being settled as completed or marked as
+    needing attention.
+    """
+
+    def __init__(self, status: str):
+        super().__init__(f"job {status}")
+        self.status = status
+
+
 def _job_folder(job: sqlite3.Row) -> str:
     """The folder a job's output belongs in, by name where one was recorded."""
     try:
@@ -178,14 +215,47 @@ class Worker:
             "SELECT * FROM jobs WHERE status = 'ready' ORDER BY created_at LIMIT 1"
         ).fetchone()
 
+    def halt_requested(self, job_id: str) -> str | None:
+        """The status this job was asked to stop at, or None to keep going.
+
+        Re-read from the database every time, deliberately. The interface writes
+        'paused' from its own connection while a stage is mid-flight, and the
+        row the worker claimed minutes or hours ago cannot know about it. This
+        is the read that used to be missing: without it a pause wrote a status
+        nobody consulted, the interface reported Paused over work that was still
+        running, and on a paid provider frames kept being sent — and charged for
+        — after the user had asked it to stop.
+        """
+        if self.stopping:
+            return "stopping"
+        try:
+            row = self.connection.execute(
+                "SELECT status FROM jobs WHERE id = ?", (job_id,)
+            ).fetchone()
+        except sqlite3.Error as error:
+            # A read that fails is not evidence of a stop request. Carrying on
+            # is the safe reading: the next check is seconds away.
+            logger.warning(
+                "Could not check whether job was stopped: %s",
+                redacted_exception_text(error),
+            )
+            return None
+        if row is None:
+            # Deleted mid-flight. Stopping is how the worker finds out politely,
+            # rather than by crashing into a foreign-key failure on its next write.
+            return "cancelled"
+        status = str(row["status"])
+        return status if status in HALTING_JOB_STATES else None
+
+    def _raise_if_halted(self, job_id: str) -> None:
+        halt = self.halt_requested(job_id)
+        if halt is not None:
+            raise JobHalted(halt)
+
     def process_job(self, job: sqlite3.Row) -> None:
         """Run every stage for every video in one job, in confirmed order."""
         logger.info("Picked up job %s (%s)", job["id"][:8], job["name"])
-        self.connection.execute(
-            "UPDATE jobs SET status = 'preparing', started_at = COALESCE(started_at, ?),"
-            " updated_at = ? WHERE id = ?",
-            (utc_now(), utc_now(), job["id"]),
-        )
+        self._set_job_status(job["id"], "preparing", starting=True)
 
         videos = self.connection.execute(
             "SELECT * FROM job_videos WHERE job_id = ? AND is_active_version = 1"
@@ -199,12 +269,21 @@ class Worker:
             return
 
         failed = 0
-        for video in videos:
-            if self.stopping:
-                logger.info("Stopping before video %s as requested.", video["sequence"] + 1)
-                return
-            if not self.process_video(job, video):
-                failed += 1
+        try:
+            for video in videos:
+                self._raise_if_halted(job["id"])
+                if not self.process_video(job, video):
+                    failed += 1
+        except JobHalted as halt:
+            # Left exactly as the user asked. No settling: a paused job is not a
+            # finished one, and overwriting its status here is what made the
+            # pause evaporate before.
+            logger.info(
+                "Job %s stopped as requested (%s). Finished work is kept.",
+                job["id"][:8],
+                halt.status,
+            )
+            return
 
         self._settle_job(job["id"], had_failures=failed > 0)
 
@@ -265,9 +344,14 @@ class Worker:
             source_path=Path(video["source_path"]),
             output_dir=output_dir,
             interval_ms=interval_ms,
+            # Consulted between description batches, which is the only place a
+            # stage runs long enough — and spends enough — for the answer to
+            # matter within a single video.
+            should_stop=lambda: self.halt_requested(job["id"]) is not None,
         )
 
         try:
+            self._raise_if_halted(job["id"])
             self._set_video_status(video["id"], "preparing")
             self._set_job_status(job["id"], "preparing")
             run_frames_stage(
@@ -275,19 +359,30 @@ class Worker:
                 make_api_copies=settings.visual_analysis.enabled,
             )
 
+            self._raise_if_halted(job["id"])
             self._set_video_status(video["id"], "transcribing")
             self._set_job_status(job["id"], "transcribing")
             run_transcription_stage(context)
 
             had_gaps = False
             if settings.visual_analysis.enabled:
+                self._raise_if_halted(job["id"])
                 self._set_video_status(video["id"], "analyzing")
                 self._set_job_status(job["id"], "analyzing")
-                had_gaps = run_visual_stage(context).has_gaps
+                result = run_visual_stage(context)
+                # The stage stops itself between batches when asked. Coming back
+                # here without finishing means the video is not finished either,
+                # so it must not fall through to assembly and a completed status.
+                if result.stopped_at_index is not None and not result.stopped_on_budget:
+                    raise JobHalted(self.halt_requested(job["id"]) or "paused")
+                had_gaps = result.has_gaps
 
+            self._raise_if_halted(job["id"])
             # Assembly runs whatever happened above: a video with gaps, or with
             # no descriptions at all, still deserves its assembled document.
             run_assembly_stage(context, display_name=video["display_name"])
+        except JobHalted:
+            raise
         except Exception as error:
             # One unreadable video must not abandon the others in the job.
             logger.error(
@@ -306,14 +401,31 @@ class Worker:
         return True
 
     def _set_video_status(self, video_id: str, status: str) -> None:
+        # Guarded for the same reason as the job status below: a video the user
+        # paused must not be dragged back into a running state by the stage that
+        # was already in flight when they asked.
         self.connection.execute(
-            "UPDATE job_videos SET status = ?, updated_at = ? WHERE id = ?",
+            _SET_VIDEO_STATUS,
             (status, utc_now(), video_id),
         )
 
-    def _set_job_status(self, job_id: str, status: str) -> None:
+    def _set_job_status(self, job_id: str, status: str, *, starting: bool = False) -> None:
+        """Move a job to a running status — unless the user asked it to stop.
+
+        The guard is the whole point. Without it the next stage's status write
+        landed straight over 'paused' (this was `UPDATE jobs SET status = ?`
+        with no condition), so a pause survived only until the job reached its
+        next stage, and the interface then showed a running status for a job the
+        user believed they had stopped.
+        """
+        if starting:
+            self.connection.execute(
+                _START_JOB,
+                (status, utc_now(), utc_now(), job_id),
+            )
+            return
         self.connection.execute(
-            "UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?",
+            _SET_JOB_STATUS,
             (status, utc_now(), job_id),
         )
 

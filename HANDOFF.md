@@ -468,27 +468,28 @@ hours of description work. §5E is the mitigation, not a cure.
   through local descriptions, and only started when that job left the loop.
   This is the pause bug's twin — both come from the worker treating a claimed
   job as uninterruptible. See §8.
-- **Pausing a running job does nothing until its current video ends.**
-  `pause_job` writes `status='paused'` to `jobs` and `job_videos`
-  (`app/services/jobs.py:186-197`) and its docstring promises to "stop a job
-  after the current step". Nothing implements that promise: neither
-  `process_job` nor `process_video` re-reads `jobs.status` after claiming, and
-  the only in-loop check is `self.stopping` (`app/worker/runner.py:203`), which
-  is worker shutdown, not job pause. `grep -n paused app/worker/runner.py`
-  returns nothing. Two consequences, both seen live: frames keep going to the
-  model after the user asked it to stop — on a cloud provider that keeps
-  spending against the budget past the stop request — and the next
-  `_set_job_status` writes `analyzing` straight over `paused`
-  (`app/worker/runner.py:284-285`), so the pause silently evaporates and the
-  interface shows Paused over work that is still running.
+- ~~**Pausing a running job does nothing until its current video ends.**~~
+  **Fixed 21 August 2026.** `Worker.halt_requested` re-reads `jobs.status` and
+  is consulted between videos, between stages, and — via the `should_stop`
+  callback now supplied on `StageContext` — before every description batch, so
+  a paid provider is sent nothing further once the user has asked it to stop.
+  The three status writes are guarded (`_SET_JOB_STATUS`, `_START_JOB`,
+  `_SET_VIDEO_STATUS` all carry `AND status NOT IN ('paused', 'cancelled')`),
+  which is what stops the next stage writing `analyzing` over `paused`. A stage
+  that stopped early records itself `paused` rather than `completed`, so
+  resuming re-enters it instead of skipping the rest of the video. Covered by
+  `tests/unit/test_worker_pause.py` and three stage-level tests in
+  `test_visual_stage.py`.
 - **Deleting a job the worker is mid-flight on races the worker.** Observed
   2026-08-12: deleting the running job removed its output folder, the next
   stage write hit `IntegrityError: FOREIGN KEY constraint failed`, and the job
   settled as `needs_attention` before the loop moved on. It self-recovered and
-  the queue drained correctly, so this is untidy rather than dangerous — but
-  the error is the worker discovering the deletion by crashing into it, not by
-  being told. Fixing the pause check above fixes this too, since both need the
-  same "re-read the row before writing to it" discipline.
+  the queue drained correctly, so this is untidy rather than dangerous.
+  **Improved 21 August 2026 but not closed:** `halt_requested` now reads a
+  missing job row as `cancelled`, so the worker is told at each checkpoint
+  rather than crashing into the deletion — but a delete landing mid-stage is
+  still discovered by the write that fails. Verifying that end-to-end needs a
+  real interleaved run, which has not been done.
 - **Latent, deliberately left alone:** eleven unused decorative classes in
   `tokens.css`, and three schema columns nothing reads (`jobs.settings_json`,
   `stage_runs.output_version`, `events.detail_json`). `stage_runs.items_skipped`
@@ -501,13 +502,11 @@ hours of description work. §5E is the mitigation, not a cure.
 `docs/LAUNCH_CHECKLIST.md` is the full list, sequenced. The short version, in
 order of value:
 
-1. **Make pause actually pause.** The worst thing in this list, and the only
-   *defect* among mostly gaps: the interface reports Paused over work that is
-   still running, and on a cloud provider it keeps spending past the stop
-   request. A control that reports a state it has not reached is worse than one
-   that is missing. Item 8 below specifies the fix; it also resolves the
-   delete-race and unblocks the queue, because all three are the same worker
-   assumption. Do it before anything else here.
+1. ~~**Make pause actually pause.**~~ **Done 21 August 2026** — see §7. The
+   remaining half of that worker assumption is the queue: `process_job` still
+   does not return until every video in the job is done, so a job queued behind
+   a long one waits for the whole thing. The pause fix does not address that,
+   and it is now the oldest live item here.
 2. **Get a git remote and let CI run.** The highest-value thing nobody can do
    from a laptop. Nine test cells, an installed-wheel job, and a container build
    have never executed. Expect Windows to surface something.

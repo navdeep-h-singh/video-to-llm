@@ -556,3 +556,91 @@ def test_transient_errors_are_retried_before_skipping(db, api_frames, tmp_path):
 
     assert result.batches_sent == 1
     assert result.has_gaps is False
+
+
+# ── A stage that stopped early has not completed ──────────────────────────
+#
+# The stage records its own outcome, and 'completed' is what `_stage_completed`
+# consults when a job resumes. A stage that stopped halfway and called itself
+# completed would be skipped on the way back in, and every frame after the
+# stopping point would go undescribed with nothing to say so — a pause quietly
+# costing the user the rest of the video.
+
+
+def _stage_context(connection, tmp_path, *, should_stop=None):
+    from dataclasses import replace
+
+    from app.core.config import Settings
+    from app.pipeline.frames import MANIFEST_FILENAME
+    from app.pipeline.stages import StageContext
+
+    (tmp_path / MANIFEST_FILENAME).write_text(
+        json.dumps({"frames": frame_records(6)}), encoding="utf-8"
+    )
+
+    settings = Settings().with_output_root(tmp_path)
+    settings = replace(
+        settings,
+        visual_analysis=replace(
+            settings.visual_analysis,
+            enabled=True,
+            provider="ollama_local",
+            models={"ollama_local": "m"},
+        ),
+    )
+    return StageContext(
+        connection=connection,
+        settings=settings,
+        job_id="j1",
+        job_video_id="v1",
+        source_path=tmp_path / "a.mp4",
+        output_dir=tmp_path,
+        interval_ms=2000,
+        should_stop=should_stop,
+    )
+
+
+def _visual_stage_status(connection) -> str:
+    row = connection.execute(
+        "SELECT status FROM stage_runs WHERE job_video_id='v1' AND stage='visual'"
+        " ORDER BY attempt DESC LIMIT 1"
+    ).fetchone()
+    return str(row["status"])
+
+
+def test_a_stage_stopped_by_the_user_records_itself_as_paused(db, api_frames, tmp_path):
+    from app.pipeline.stages import run_visual_stage
+
+    calls = {"n": 0}
+
+    def should_stop():
+        calls["n"] += 1
+        return calls["n"] > 2
+
+    context = _stage_context(db, tmp_path, should_stop=should_stop)
+    result = run_visual_stage(context, provider=FakeProvider())
+
+    assert result.stopped_at_index is not None
+    assert _visual_stage_status(db) == "paused"
+
+
+def test_a_paused_stage_is_not_treated_as_done_on_the_way_back_in(db, api_frames, tmp_path):
+    from app.pipeline.stages import _stage_completed, run_visual_stage
+
+    context = _stage_context(db, tmp_path, should_stop=lambda: True)
+    run_visual_stage(context, provider=FakeProvider())
+
+    assert _stage_completed(db, "v1", "visual") is False, (
+        "resuming must re-enter the stage, or the rest of the video is never described"
+    )
+
+
+def test_a_stage_nobody_stopped_still_completes(db, api_frames, tmp_path):
+    from app.pipeline.stages import _stage_completed, run_visual_stage
+
+    context = _stage_context(db, tmp_path, should_stop=lambda: False)
+    result = run_visual_stage(context, provider=FakeProvider())
+
+    assert result.stopped_at_index is None
+    assert _visual_stage_status(db) == "completed"
+    assert _stage_completed(db, "v1", "visual") is True

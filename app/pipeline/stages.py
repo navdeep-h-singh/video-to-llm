@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import sqlite3
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,11 @@ class StageContext:
     source_path: Path
     output_dir: Path
     interval_ms: int
+
+    #: Asked between units of work inside a long stage. True means the user has
+    #: paused or cancelled the job, or the worker is shutting down. Only the
+    #: description stage is long enough — and expensive enough — to consult it.
+    should_stop: Callable[[], bool] | None = None
 
     @property
     def output_root(self) -> Path:
@@ -472,6 +478,7 @@ def run_visual_stage(context: StageContext, *, provider: Any = None) -> Any:
             provider=active,
             requests=requests,
             budget=budget,
+            should_stop=context.should_stop,
             on_progress=visual_progress.advance_to,
             on_flush=visual_progress.flush,
             on_carried=visual_progress.note_carried,
@@ -532,10 +539,22 @@ def run_visual_stage(context: StageContext, *, provider: Any = None) -> Any:
             job_video_id=context.job_video_id,
         )
 
+    # A stage that stopped early has not finished, whatever it managed to
+    # describe. Recording it 'completed' would make `_stage_completed` skip it
+    # on resume, and the frames after the stopping point would never be
+    # described at all — the pause would quietly cost the user the rest of the
+    # video. 'paused' is not a completed state, so resuming re-enters the stage,
+    # and the batches already on disk are carried across attempts rather than
+    # sent — and paid for — a second time.
+    #
+    # Scoped to a user stop. A budget stop already has its own reporting and its
+    # own settled meaning — the job is finished, at the limit the user set — and
+    # widening this to cover it would change what a capped job says it did.
+    stopped_early = result.stopped_at_index is not None and not result.stopped_on_budget
     _finish_stage(
         context,
         stage_run_id,
-        status=result.status,
+        status="paused" if stopped_early else result.status,
         items_total=total_frames,
         items_done=len(result.descriptions),
         provider=visual.provider,
@@ -553,7 +572,16 @@ def run_visual_stage(context: StageContext, *, provider: Any = None) -> Any:
         },
     )
 
-    if result.has_gaps:
+    if stopped_early:
+        _record_event(
+            context,
+            f"Stopped describing {context.source_path.name} because you asked it to stop. "
+            f"{len(result.descriptions):,} pictures are described and kept; "
+            "starting the job again picks up from the next one.",
+            level="warning",
+            kind="stage_paused",
+        )
+    elif result.has_gaps:
         _record_event(
             context,
             f"Described {len(result.descriptions):,} pictures from "

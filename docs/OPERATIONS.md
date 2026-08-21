@@ -31,6 +31,14 @@ claim catches network filesystems where advisory locking is unreliable.
 **Pause** stops after the current step. Everything finished is kept, and
 resuming picks up where it stopped rather than starting over.
 
+How soon it takes effect depends on what the job is doing. Between videos, and
+between stages, the worker checks before it starts the next one. Inside the
+description stage — the long one, and the only one that can cost money — it
+checks before every batch, so on a paid provider nothing further is sent once
+you have asked it to stop. Taking pictures and writing the transcript are single
+FFmpeg and Whisper calls that run to the end of the current video before the
+pause lands.
+
 **Cancel** stops for good — and still keeps everything already produced.
 Cancelling is not undoing. Frames, transcripts, and descriptions on disk cost
 time and possibly money; you asked to stop, not to throw them away.
