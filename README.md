@@ -8,7 +8,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.11%20|%203.12%20|%203.13-blue" alt="Python 3.11 to 3.13">
-  <img src="https://img.shields.io/badge/tests-1%2C421-brightgreen" alt="1,421 tests">
+  <img src="https://img.shields.io/badge/tests-1%2C541-brightgreen" alt="1,541 tests">
   <img src="https://img.shields.io/badge/network-not%20required-ec3013" alt="Runs offline">
   <img src="https://img.shields.io/badge/licence-MIT-lightgrey" alt="MIT licence">
 </p>
@@ -88,15 +88,19 @@ Honest in both directions — including where this is the wrong tool.
 
 | | video-to-llm | Clip tools (`/watch`, `claude-real-video`) | Upload the video |
 |---|---|---|---|
-| Video length | Hours. Tested on 49 min / 1,488 frames and a 15 h course | Minutes; frame caps around 150 | Minutes to an hour, at cost |
+| Video length | Hours. Tested on 49 min / 1,488 frames and a 15 h course | Minutes; frame caps of 50–150 by default | Minutes to an hour, at cost |
 | Asking a second question | Free and instant — reuses the document | Re-downloads and re-processes | Re-uploads or re-pays |
 | Survives a crash mid-job | Yes, resumes the exact stage | No | n/a |
 | Many videos, one ordered document | Yes | No | No |
-| Leaves your machine | Never, unless you opt in per job | Audio usually via a cloud API | Entirely |
+| Leaves your machine | Never, unless you opt in per job | Varies — `claude-real-video` transcribes locally; `/watch` sends audio to Groq or OpenAI when a video has no captions | Entirely |
+| Spoken language | Any — detected, or named with `--language` | Varies; `/watch` requests English captions | Any |
 | Cost control | Cap checked before each request | None | Pay per call |
 | Cite a claim back to a frame | Yes | No | No |
 | **Setup time** | **Minutes: FFmpeg and a 2 GB model** | **Seconds** | **Seconds** |
 | **One quick clip** | **Overkill — use something else** | **Ideal** | **Ideal** |
+
+Checked against those projects' own documentation on 21 August 2026. They move;
+if a row here has gone stale, that is a bug worth reporting.
 
 ## Using it
 
@@ -183,6 +187,12 @@ anything leaves, and processing stops at a cap you set.
   picture every 2 seconds is roughly 2 GB
 
 A GPU is optional everywhere. Transcription runs on CPU on every platform.
+
+**FFmpeg 9 is fine.** It removed `-vsync`, which every FFmpeg before 5 needed;
+extraction reads the version once and asks for whichever flag that build
+accepts, so 4.x through 9.x all work. `video-to-llm doctor` prints the version it
+found and the flag it will use. Development here was against 8.1.2; the rest is
+covered by tests on the argument list and by the CI matrix.
 
 ### Other ways to install
 

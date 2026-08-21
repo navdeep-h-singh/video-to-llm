@@ -63,6 +63,13 @@ jobs:
       - name: Pre-publish audit
         run: uv run python scripts/pre_publish_audit.py
 
+      # The README's test-count badge is a claim, and it went stale once. One
+      # cell is enough to catch it; running this nine times would only say the
+      # same thing nine times.
+      - name: README test-count badge is current
+        if: runner.os == 'Linux' && matrix.python == '3.12'
+        run: uv run python scripts/check_test_badge.py
+
       - name: Synthetic smoke test (no network)
         run: uv run video-to-llm smoke-test
 
