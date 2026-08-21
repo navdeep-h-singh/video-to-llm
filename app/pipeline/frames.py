@@ -18,6 +18,7 @@ frame map, the reruns, and the collection references reproducible.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -43,9 +44,77 @@ MANIFEST_FILENAME = "frames_manifest.json"
 
 EXTRACT_TIMEOUT_SECONDS = 3600
 
+#: How long to wait for `ffmpeg -version`. Generous, because a cold cache on a
+#: slow disk is not a reason to fail extraction before it starts.
+VERSION_TIMEOUT_SECONDS = 10
+
+#: The first FFmpeg release that understands `-fps_mode`. Below this, `-vsync`
+#: is the only spelling; from 9.0 it is the only *surviving* one.
+FPS_MODE_SINCE_MAJOR = 5
+
 
 class FrameExtractionError(RuntimeError):
     pass
+
+
+def parse_ffmpeg_major(version_text: str) -> int | None:
+    """The major version from `ffmpeg -version` output, or None if unreadable.
+
+    Distribution builds put all sorts of things in this line — `n7.1`,
+    `7.1.1-static`, `6.0-6ubuntu1`, a bare git hash on a self-compiled build.
+    Only the leading integer is wanted, and an unreadable line is reported
+    honestly rather than guessed at, because the caller's fallback is the
+    conservative branch.
+    """
+    match = re.search(r"ffmpeg version n?(\d+)\.", version_text)
+    return int(match.group(1)) if match else None
+
+
+_ffmpeg_major_cache: dict[str, int | None] = {}
+
+
+def ffmpeg_major(ffmpeg_path: str) -> int | None:
+    """Cached major version of the FFmpeg at this path.
+
+    Cached per path for the life of the process: extraction runs this once per
+    video otherwise, and a job of fifteen videos does not need fifteen extra
+    subprocesses to learn the same answer.
+    """
+    if ffmpeg_path in _ffmpeg_major_cache:
+        return _ffmpeg_major_cache[ffmpeg_path]
+
+    try:
+        result = subprocess.run(
+            [ffmpeg_path, "-version"],
+            capture_output=True,
+            text=True,
+            timeout=VERSION_TIMEOUT_SECONDS,
+            check=False,
+        )
+        major = parse_ffmpeg_major(result.stdout or "")
+    except (OSError, subprocess.SubprocessError):
+        major = None
+
+    _ffmpeg_major_cache[ffmpeg_path] = major
+    return major
+
+
+def frame_rate_mode_args(major: int | None) -> list[str]:
+    """The one-frame-per-interval flag this FFmpeg actually accepts.
+
+    FFmpeg 9.0 removed `-vsync` outright, along with `-top`, `-qphist` and
+    `-filter_complex_script`. Its replacement, `-fps_mode`, has existed since
+    5.0 but does not exist before it — and 4.x is still what Ubuntu 22.04 ships,
+    so neither spelling is safe to hardcode.
+
+    An unreadable version takes the older spelling. Being wrong that way fails
+    loudly on a new FFmpeg at the start of extraction; being wrong the other way
+    fails on an old one, which is the machine least likely to have another
+    option available.
+    """
+    if major is not None and major >= FPS_MODE_SINCE_MAJOR:
+        return ["-fps_mode", "vfr"]
+    return ["-vsync", "vfr"]
 
 
 @dataclass(frozen=True)
@@ -198,8 +267,9 @@ def extract_frames(
         interval_ms,
     )
 
-    # `-vsync vfr` with an fps filter gives one frame per interval without
-    # duplicating frames when the source rate is lower than the sample rate.
+    # Variable frame rate alongside an fps filter gives one frame per interval
+    # without duplicating frames when the source rate is lower than the sample
+    # rate. Which flag spells that depends on the FFmpeg in front of us.
     _run_ffmpeg(
         [
             ffmpeg,
@@ -212,8 +282,7 @@ def extract_frames(
             f"fps={fps_expression},scale={FRAME_WIDTH}:{FRAME_HEIGHT}"
             f":force_original_aspect_ratio=decrease,"
             f"pad={FRAME_WIDTH}:{FRAME_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black",
-            "-vsync",
-            "vfr",
+            *frame_rate_mode_args(ffmpeg_major(ffmpeg)),
             "-q:v",
             "3",
             str(frames_dir / "%06d.jpg"),

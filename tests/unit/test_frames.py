@@ -15,9 +15,12 @@ from app.pipeline.frames import (
     FRAME_HEIGHT,
     FRAME_WIDTH,
     FRAMES_DIRNAME,
+    FrameExtractionError,
     expected_frame_count,
     extract_frames,
     frame_filename,
+    frame_rate_mode_args,
+    parse_ffmpeg_major,
     plan_frames,
     timestamp_token,
 )
@@ -225,3 +228,127 @@ def test_provider_copies_can_be_skipped(tmp_path):
     )
     assert list(result.api_frames_dir.glob("*.jpg")) == []
     assert len(result.frames) >= 2
+
+
+# ── Which FFmpeg is in front of us ────────────────────────────────────────
+#
+# FFmpeg 9.0 removed `-vsync` outright. Its replacement, `-fps_mode`, does not
+# exist before 5.0 — and 4.x is still what Ubuntu 22.04 ships. Neither spelling
+# is safe to hardcode, so extraction asks first.
+
+
+@pytest.mark.parametrize(
+    ("line", "expected"),
+    [
+        ('ffmpeg version 9.0 "Lei" Copyright (c) 2000-2026', 9),
+        ("ffmpeg version 8.1.2 Copyright (c) 2000-2026 the FFmpeg developers", 8),
+        ("ffmpeg version n7.1 Copyright (c) 2000-2024", 7),
+        ("ffmpeg version 6.0-6ubuntu1 Copyright (c) 2000-2023", 6),
+        ("ffmpeg version 5.0 Copyright (c)", 5),
+        ("ffmpeg version 4.4.2-0ubuntu0.22.04.1 Copyright (c) 2000-2021", 4),
+    ],
+)
+def test_the_major_version_is_read_from_the_banner(line, expected):
+    assert parse_ffmpeg_major(line) == expected
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "",
+        "not ffmpeg at all",
+        # A self-compiled build with no version number to read.
+        "ffmpeg version git-2020-08-01-abcdef Copyright (c)",
+    ],
+)
+def test_an_unreadable_banner_reports_nothing_rather_than_guessing(line):
+    assert parse_ffmpeg_major(line) is None
+
+
+@pytest.mark.parametrize("major", [5, 6, 7, 8, 9, 10])
+def test_modern_ffmpeg_gets_the_flag_that_still_exists(major):
+    assert frame_rate_mode_args(major) == ["-fps_mode", "vfr"]
+
+
+@pytest.mark.parametrize("major", [2, 3, 4])
+def test_old_ffmpeg_gets_the_only_flag_it_knows(major):
+    assert frame_rate_mode_args(major) == ["-vsync", "vfr"]
+
+
+def test_an_unknown_version_takes_the_older_spelling():
+    # Wrong this way fails loudly at the start of extraction on a new FFmpeg.
+    # Wrong the other way fails on an old one, which is the machine least likely
+    # to have another option available.
+    assert frame_rate_mode_args(None) == ["-vsync", "vfr"]
+
+
+def _fake_info(tmp_path):
+    from app.pipeline.probe import VideoInfo
+
+    return VideoInfo(
+        path=tmp_path / "clip.mp4",
+        duration_seconds=6.0,
+        width=1920,
+        height=1080,
+        container="mp4",
+        video_codec="h264",
+        has_audio=True,
+        audio_codec="aac",
+        size_bytes=1024,
+    )
+
+
+@pytest.mark.parametrize(
+    ("major", "wanted", "removed"),
+    [(9, "-fps_mode", "-vsync"), (4, "-vsync", "-fps_mode")],
+)
+def test_extraction_asks_for_the_flag_this_ffmpeg_accepts(
+    tmp_path, monkeypatch, major, wanted, removed
+):
+    """The regression itself: `-vsync` on FFmpeg 9 extracts zero frames.
+
+    Asserted on the argument list rather than on a successful run, so it holds
+    whichever FFmpeg the machine running the tests happens to have — including
+    on CI, where macOS and Windows now install 9.x and Ubuntu still does not.
+    """
+    captured: dict = {}
+
+    def capture(args, *, what):
+        captured["args"] = args
+        # Extraction reads the directory afterwards; failing there is fine, the
+        # argument list is already what this test came for.
+        raise FrameExtractionError("not actually running ffmpeg")
+
+    monkeypatch.setattr("app.pipeline.frames._run_ffmpeg", capture)
+    monkeypatch.setattr("app.pipeline.frames._ffmpeg_path", lambda: "/usr/bin/ffmpeg")
+    monkeypatch.setattr("app.pipeline.frames.ffmpeg_major", lambda _path: major)
+
+    with pytest.raises(FrameExtractionError):
+        extract_frames(_fake_info(tmp_path), tmp_path / "out", interval_ms=2000)
+
+    args = captured["args"]
+    assert wanted in args
+    assert removed not in args
+    assert args[args.index(wanted) + 1] == "vfr"
+
+
+def test_the_version_is_only_asked_for_once_per_ffmpeg(monkeypatch):
+    # A job of fifteen videos does not need fifteen extra subprocesses to learn
+    # the same answer.
+    from app.pipeline import frames as frames_module
+
+    calls = {"n": 0}
+
+    class Result:
+        stdout = "ffmpeg version 8.1.2 Copyright (c)"
+
+    def fake_run(*_args, **_kwargs):
+        calls["n"] += 1
+        return Result()
+
+    monkeypatch.setattr(frames_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(frames_module, "_ffmpeg_major_cache", {})
+
+    assert frames_module.ffmpeg_major("/usr/bin/ffmpeg") == 8
+    assert frames_module.ffmpeg_major("/usr/bin/ffmpeg") == 8
+    assert calls["n"] == 1

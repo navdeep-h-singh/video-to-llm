@@ -21,6 +21,7 @@ from enum import StrEnum
 from app.core.config import Settings, is_loopback_host
 from app.core.logging import get_logger
 from app.core.redaction import redacted_exception_text
+from app.pipeline.frames import FPS_MODE_SINCE_MAJOR, parse_ffmpeg_major
 
 logger = get_logger(__name__)
 
@@ -114,11 +115,22 @@ def check_ffmpeg() -> CheckResult:
 
     first_line = (result.stdout or "").splitlines()[:1]
     version = first_line[0] if first_line else "version unknown"
+
+    # FFmpeg 9 removed `-vsync`, which every version before 5 was the only
+    # spelling of. Extraction picks the right one on its own; reporting which
+    # one is what makes a failure here readable rather than mysterious.
+    major = parse_ffmpeg_major(result.stdout or "")
+    if major is None:
+        detail = f"{version} — version unreadable, so extraction will use -vsync."
+    else:
+        flag = "-fps_mode" if major >= FPS_MODE_SINCE_MAJOR else "-vsync"
+        detail = f"{version} — major version {major}, extracting with {flag}."
+
     return CheckResult(
         key="ffmpeg",
         title="Reading your video files",
         state=CheckState.OK,
-        detail=version,
+        detail=detail,
     )
 
 
