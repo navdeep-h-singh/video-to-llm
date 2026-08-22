@@ -8,7 +8,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.11%20|%203.12%20|%203.13-blue" alt="Python 3.11 to 3.13">
-  <img src="https://img.shields.io/badge/tests-1%2C569-brightgreen" alt="1,569 tests">
+  <img src="https://img.shields.io/badge/tests-1%2C575-brightgreen" alt="1,575 tests">
   <img src="https://img.shields.io/badge/network-not%20required-ec3013" alt="Runs offline">
   <img src="https://img.shields.io/badge/licence-MIT-lightgrey" alt="MIT licence">
 </p>
@@ -30,18 +30,32 @@ for as long as you keep the folder.
 ## Quickstart
 
 ```bash
+uvx video-to-llm process lecture.mp4 --transcribe-model tiny
+```
+
+That is the fast way to see it work: the `tiny` speech model is a **75 MB**
+download rather than the default's **1.4 GB**, so you get a real document in
+about a minute instead of waiting on a download to find out whether you like
+the output. Once you do, drop the flag:
+
+```bash
 uvx video-to-llm process lecture.mp4
 ```
 
 > **Not on PyPI yet.** Until the first release lands, clone the repository and
 > run `uv sync`, then `uv run video-to-llm process lecture.mp4`.
 
-You need [FFmpeg](https://ffmpeg.org) on your `PATH`. The first run downloads a
-speech-to-text model (about 2 GB) and then never touches the network again.
+You need [FFmpeg](https://ffmpeg.org) on your `PATH` — version 4 through 9, all
+fine. The speech model downloads once, on first use, and after that nothing
+touches the network again.
 
 ```bash
 video-to-llm doctor          # check this machine is ready
 ```
+
+`tiny` is quick and noticeably less accurate; `medium` is the default because it
+is the smallest one worth keeping a transcript from. `--transcribe-model` also
+takes `base`, `small`, and `large-v3`.
 
 ## What you get
 
@@ -77,7 +91,7 @@ in job 'lecture'
   00:02:01  You're either going up or you're either coming down. Very simple, right?
 > 00:02:05  But when you look at trends in terms of structure, what we are looking for is the basic.
 
-Picture: ~/VideoToLLM/lecture/…/frames/000062_t000124.jpg
+Picture: ~/Documents/VideoToLLM/lecture/…/frames/000062_t000124.jpg
 ```
 
 A claim your model makes is only evidence if you can check it. This is how.
@@ -96,7 +110,7 @@ Honest in both directions — including where this is the wrong tool.
 | Spoken language | Any — detected, or named with `--language` | Varies; `/watch` requests English captions | Any |
 | Cost control | Cap checked before each request | None | Pay per call |
 | Cite a claim back to a frame | Yes | No | No |
-| **Setup time** | **Minutes: FFmpeg and a 2 GB model** | **Seconds** | **Seconds** |
+| **Setup time** | **Minutes: FFmpeg and a 75 MB model** | **Seconds** | **Seconds** |
 | **One quick clip** | **Overkill — use something else** | **Ideal** | **Ideal** |
 
 Checked against those projects' own documentation on 21 August 2026. They move;
@@ -134,7 +148,21 @@ An agent cannot choose a paid description service through these tools. That
 decision belongs on the settings screen, where the estimate and the spending cap
 are visible.
 
-For Claude Code, the plugin registers both the skill and the MCP server.
+There is also a skill, which teaches an agent to check what is already processed
+before doing anything expensive:
+
+```bash
+npx skills add navdeep-h-singh/video-to-llm -g
+```
+
+That works in Codex, Cursor, Copilot, Gemini CLI, and anything else that reads
+Agent Skills. For Claude Code, the plugin registers the skill and the MCP server
+together:
+
+```bash
+/plugin marketplace add navdeep-h-singh/video-to-llm
+/plugin install video-to-llm@video-to-llm
+```
 
 ### From the browser
 
@@ -184,8 +212,9 @@ anything leaves, and processing stops at a cap you set.
 
 - Python 3.11, 3.12, or 3.13
 - FFmpeg with `ffprobe` on your `PATH`
-- ~2 GB for the speech model, plus room for frames — a 2-hour video at one
-  picture every 2 seconds is roughly 2 GB
+- Room for the speech model — 75 MB for `tiny`, 1.4 GB for the default
+  `medium` — plus room for frames: a 2-hour video at one picture every
+  2 seconds is roughly 2 GB
 
 A GPU is optional everywhere. Transcription runs on CPU on every platform.
 

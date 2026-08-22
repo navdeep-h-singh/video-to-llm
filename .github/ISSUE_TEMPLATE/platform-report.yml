@@ -1,0 +1,62 @@
+name: Windows or Linux report
+description: Something went wrong on an operating system this was not developed on
+title: "[platform] "
+labels: ["platform"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **These are the most useful reports this project can receive right now.**
+
+        Development happened entirely on macOS (Apple Silicon). Windows and Linux
+        are CI-tested but have never been used in anger, and the parts most likely
+        to break are written defensively rather than proven: path separators, the
+        keyring backend, symlink and hard-link fallbacks, the folder-name slug,
+        and console encoding.
+
+        A report that only says "it doesn't work on Windows" cannot be acted on.
+        The fields below are the ones that make it fixable.
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `video-to-llm doctor`
+      description: Run it and paste the whole thing. It reports FFmpeg's version and which frame-rate flag will be used, which is the single most common cause of a failed run.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system and version
+      placeholder: "Windows 11 26H1 · Ubuntu 26.04 · Fedora 43"
+    validations:
+      required: true
+  - type: input
+    id: python
+    attributes:
+      label: Python version
+      description: "`python --version`"
+      placeholder: "3.13.2"
+    validations:
+      required: true
+  - type: input
+    id: install
+    attributes:
+      label: How it was installed
+      placeholder: "uvx · uv tool install · pipx · git clone + uv sync · Docker"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What you ran, and what happened
+      description: The exact command, then the output. A traceback is worth more than a description of one.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: video
+    attributes:
+      label: About the video, if one was involved
+      description: Container, rough length, and whether it has audio. **Do not attach the video** — this project never wants your media, and a description is enough to reproduce with a generated file.
+      placeholder: "45-minute .mkv screen recording, has audio, path has a space in it"

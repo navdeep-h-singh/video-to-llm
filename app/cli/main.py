@@ -23,6 +23,21 @@ from app.core.logging import configure_logging, get_logger
 logger = get_logger(__name__)
 
 
+def _installed_version() -> str:
+    """The version of the installed distribution, or a marker when there is none.
+
+    Asked for by the bug report template, so it has to be the version the user
+    actually has rather than a constant somebody forgot to bump. A checkout run
+    with `uv run` and no install says so plainly instead of guessing.
+    """
+    from importlib.metadata import PackageNotFoundError, version
+
+    try:
+        return version("video-to-llm")
+    except PackageNotFoundError:
+        return "unknown (running from a checkout, not an installed package)"
+
+
 def _resolve_settings(args: argparse.Namespace) -> Settings:
     settings = load_settings()
     root = getattr(args, "output_root", None)
@@ -473,6 +488,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--output-root", help="Folder that holds everything this makes")
     parser.add_argument("--log-level", default=None, help="DEBUG, INFO, WARNING, or ERROR")
+    # Read from the installed package rather than hardcoded, so it cannot
+    # disagree with what was actually released. The bug report template asks for
+    # this, which is the whole reason it exists.
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"video-to-llm {_installed_version()}",
+        help="Print the version and exit",
+    )
 
     sub = parser.add_subparsers(dest="command", required=True)
 

@@ -25,7 +25,13 @@ import pytest
 from app.cli.main import build_parser
 
 REPO = Path(__file__).resolve().parents[2]
-SKILL = REPO / "skill" / "SKILL.md"
+#: The conventional location. `npx skills` — the tool the highest-starred
+#: projects in this category distribute through — discovers skills by walking
+#: standard container directories: the repo root, `skills/`, `skills/<name>/`,
+#: and the agent-specific ones. A singular `skill/` is not among them, which
+#: is where this lived until the layout was corrected.
+SKILLS_DIR = REPO / "skills"
+SKILL = SKILLS_DIR / "video-to-llm" / "SKILL.md"
 PLUGIN = REPO / ".claude-plugin" / "plugin.json"
 MARKETPLACE = REPO / ".claude-plugin" / "marketplace.json"
 
@@ -117,6 +123,19 @@ def test_the_plugin_manifests_are_valid_json(manifest):
     json.loads(manifest.read_text(encoding="utf-8"))
 
 
+def test_the_skill_sits_where_a_skill_installer_looks_for_it():
+    """The layout, asserted rather than assumed.
+
+    `npx skills add <owner>/<repo>` reaches every Agent Skills host — Codex,
+    Cursor, Copilot, Gemini CLI — not only Claude Code, and it finds skills by
+    directory convention. The manifest below is a second route to the same
+    file; this is the one that works without it.
+    """
+    assert SKILLS_DIR.is_dir(), "skills/ is the directory a skill installer walks"
+    found = sorted(path.parent.name for path in SKILLS_DIR.glob("*/SKILL.md"))
+    assert found == ["video-to-llm"], f"expected skills/<name>/SKILL.md, found {found or 'nothing'}"
+
+
 def test_the_plugin_points_at_the_skill_directory_that_exists():
     manifest = json.loads(PLUGIN.read_text(encoding="utf-8"))
     for relative in manifest["skills"]:
@@ -132,3 +151,64 @@ def test_the_plugin_starts_the_mcp_server_with_a_real_command():
     assert server["command"] == "video-to-llm"
     assert server["args"] == ["mcp"]
     assert "mcp" in _subcommands()
+
+
+# ── The MCP registry entry ────────────────────────────────────────────────
+#
+# `server.json` is what the official registry reads. It repeats three things the
+# package already states — the name, the version, and how to start the server —
+# and a repeated fact is a fact that can drift. The registry rejects a version
+# that does not match the published package, which would be discovered at
+# release time rather than here.
+
+SERVER = REPO / "server.json"
+
+
+def _server() -> dict:
+    assert SERVER.exists(), "server.json is how the MCP registry finds this"
+    return json.loads(SERVER.read_text(encoding="utf-8"))
+
+
+def _project() -> dict:
+    import tomllib
+
+    return tomllib.loads((REPO / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+
+
+def test_the_registry_entry_names_the_package_that_is_published():
+    package = _server()["packages"][0]
+    assert package["identifier"] == _project()["name"]
+    assert package["registryType"] == "pypi"
+
+
+def test_the_registry_entry_carries_the_version_being_released():
+    server = _server()
+    version = _project()["version"]
+    assert server["version"] == version
+    assert server["packages"][0]["version"] == version
+
+
+def test_the_registry_entry_starts_the_server_the_way_the_plugin_does():
+    """One command, described in two manifests. They must agree."""
+    arguments = [a["value"] for a in _server()["packages"][0]["packageArguments"]]
+    plugin = json.loads(PLUGIN.read_text(encoding="utf-8"))
+    assert arguments == plugin["mcpServers"]["video-to-llm"]["args"] == ["mcp"]
+    assert "mcp" in _subcommands()
+
+
+def test_the_registry_namespace_matches_the_repository_it_claims():
+    """The registry verifies ownership against the GitHub namespace, so a
+    mismatch here is a publish that is refused rather than a broken link."""
+    server = _server()
+    owner = server["repository"]["url"].removeprefix("https://github.com/").split("/")[0]
+    assert server["name"].startswith(f"io.github.{owner}/")
+    assert "OWNER" not in server["name"]
+
+
+def test_the_registry_entry_only_names_environment_variables_that_exist():
+    from app.core.config import ENV_PREFIX
+
+    for variable in _server()["packages"][0].get("environmentVariables", []):
+        assert variable["name"].startswith(ENV_PREFIX), (
+            f"{variable['name']} is not a setting this application reads"
+        )

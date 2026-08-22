@@ -5,8 +5,8 @@
   "author": {
     "name": "the video-to-llm contributors"
   },
-  "homepage": "https://github.com/OWNER/video-to-llm",
-  "repository": "https://github.com/OWNER/video-to-llm",
+  "homepage": "https://github.com/navdeep-h-singh/video-to-llm",
+  "repository": "https://github.com/navdeep-h-singh/video-to-llm",
   "license": "MIT",
   "keywords": [
     "video",
@@ -18,7 +18,7 @@
     "citations"
   ],
   "skills": [
-    "./skill"
+    "./skills/video-to-llm"
   ],
   "mcpServers": {
     "video-to-llm": {

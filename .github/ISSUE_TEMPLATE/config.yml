@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Question about using it
+    url: https://github.com/navdeep-h-singh/video-to-llm/discussions
+    about: Ask in Discussions rather than opening an issue — you will get an answer faster and it stays findable for the next person.
+  - name: Security vulnerability
+    url: https://github.com/navdeep-h-singh/video-to-llm/security/advisories/new
+    about: Report privately through GitHub's Security tab. Please do not open a public issue.

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "name": "io.github.navdeep-h-singh/video-to-llm",
+  "description": "Read local video by turning it into one timestamped, citable document — once. Fully offline, resumable, built for hours of video.",
+  "repository": {
+    "url": "https://github.com/navdeep-h-singh/video-to-llm",
+    "source": "github"
+  },
+  "version": "1.0.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "video-to-llm",
+      "version": "1.0.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp",
+          "isRequired": true,
+          "description": "Run the MCP server on stdio."
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "VIDEO_TO_LLM_OUTPUT_ROOT",
+          "description": "Where processed video is kept and looked up. Defaults to ~/Documents/VideoToLLM. Set this to point an agent at an existing library rather than starting a new one.",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}

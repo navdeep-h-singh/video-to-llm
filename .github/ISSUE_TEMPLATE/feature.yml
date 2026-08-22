@@ -1,0 +1,23 @@
+name: Feature request
+description: Something this should do and does not
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The situation, not the solution. What the tool does today and why that is not enough is more useful than a described feature — it leaves room for an answer neither of us has thought of.
+    validations:
+      required: true
+  - type: textarea
+    id: shape
+    attributes:
+      label: What would a good answer look like?
+      description: Optional. A command, a screen, an output format.
+  - type: markdown
+    attributes:
+      value: |
+        Worth knowing before you write: this tool deliberately does **not** infer
+        the order of your videos, download from URLs, fall back from a local model
+        to a cloud one, or send anything anywhere you did not ask it to. Those are
+        decisions rather than gaps, and `docs/DECISIONS.md` says why.

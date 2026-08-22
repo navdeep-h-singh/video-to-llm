@@ -10,25 +10,20 @@ Ordered so that each step unblocks the next.
 
 ## 1. Blocking — nothing can be published until these are done
 
-### 1.1 Pick the GitHub account and resolve the placeholder
+### 1.1 ~~Pick the GitHub account and resolve the placeholder~~ — done
 
-Seven places say `OWNER` where an account name belongs. Find them:
+The account is **`navdeep-h-singh`**, and every placeholder is resolved:
+`pyproject.toml` (five URLs), `.claude-plugin/plugin.json`, `server.json`, and
+the badge snippets below. The release-mode audit passes:
 
 ```bash
 uv run python scripts/pre_publish_audit.py --release
 ```
 
-Replace, then confirm the audit passes in release mode. It refuses while any
-remain, so this cannot be forgotten — but it also means **the release workflow
-will fail until it is done**.
-
-Files affected: `pyproject.toml` (five URLs), `.claude-plugin/plugin.json`, and
-the audit's own note.
-
 ### 1.2 Create the repository and let CI run
 
 ```bash
-gh repo create video-to-llm --private --source=. --push
+gh repo create navdeep-h-singh/video-to-llm --private --source=. --push
 ```
 
 **Private first.** Nine test cells (3 operating systems × 3 Python versions),
@@ -101,7 +96,7 @@ The README carries static badges today. Add the live CI badge the moment the
 first run is green, and the PyPI version badge on first publish:
 
 ```markdown
-[![CI](https://github.com/OWNER/video-to-llm/actions/workflows/ci.yml/badge.svg)](https://github.com/OWNER/video-to-llm/actions/workflows/ci.yml)
+[![CI](https://github.com/navdeep-h-singh/video-to-llm/actions/workflows/ci.yml/badge.svg)](https://github.com/navdeep-h-singh/video-to-llm/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/video-to-llm)](https://pypi.org/project/video-to-llm/)
 ```
 
@@ -197,8 +192,13 @@ Do not reorder these. Show HN happens once.
 
 ## 7. Seed the issue tracker
 
-An empty tracker looks abandoned. These are real, small, and genuinely useful —
-good `good first issue` candidates, all drawn from known limitations:
+The templates are in place — `.github/ISSUE_TEMPLATE/`, including a **Windows or
+Linux report** form that asks for `doctor` output, OS build, Python version and
+install method. Those are the reports this project most needs and least knows
+how to ask for.
+
+An empty tracker still looks abandoned. These are real, small, and genuinely
+useful — good `good first issue` candidates, all drawn from known limitations:
 
 1. **Prune the event log.** It grows without bound; progress events are already
    rate-limited to one per ten minutes to avoid making it worse.

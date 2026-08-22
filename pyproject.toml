@@ -45,14 +45,14 @@ dependencies = [
     "filelock>=3.16",
 ]
 
-# Set OWNER before publishing. `scripts/pre_publish_audit.py` refuses to pass
-# while the placeholder is still here, so a release cannot carry a dead link.
+# `scripts/pre_publish_audit.py --release` refuses while any placeholder owner
+# remains, so a release cannot carry a dead link.
 [project.urls]
-Homepage = "https://github.com/OWNER/video-to-llm"
-Documentation = "https://github.com/OWNER/video-to-llm/tree/main/docs"
-Source = "https://github.com/OWNER/video-to-llm"
-Issues = "https://github.com/OWNER/video-to-llm/issues"
-Changelog = "https://github.com/OWNER/video-to-llm/releases"
+Homepage = "https://github.com/navdeep-h-singh/video-to-llm"
+Documentation = "https://github.com/navdeep-h-singh/video-to-llm/tree/main/docs"
+Source = "https://github.com/navdeep-h-singh/video-to-llm"
+Issues = "https://github.com/navdeep-h-singh/video-to-llm/issues"
+Changelog = "https://github.com/navdeep-h-singh/video-to-llm/releases"
 
 [project.optional-dependencies]
 # The MCP server is optional so the core install stays free of a dependency
@@ -87,7 +87,7 @@ packages = ["app"]
 # The skill and the docs ship with the source distribution: a skill host that
 # vendors from sdist needs SKILL.md, and the limitations in docs/ are part of
 # what the package claims about itself.
-include = ["app", "config", "docs", "skill", "scripts", "README.md", "LICENSE"]
+include = ["app", "config", "docs", "skills", "scripts", "README.md", "LICENSE"]
 
 [tool.ruff]
 line-length = 100

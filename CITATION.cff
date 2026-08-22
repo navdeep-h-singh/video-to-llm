@@ -1,0 +1,38 @@
+cff-version: 1.2.0
+title: "video-to-llm"
+message: >-
+  If you used this to prepare video evidence for published work, please cite it.
+  Two of the audiences this was built for — researchers with interview or field
+  recordings, and people working with depositions and case material — cite their
+  tools, and a tool that produces citable timestamps should be citable itself.
+type: software
+authors:
+  - given-names: Navdeep
+    family-names: Singh
+    alias: navdeep-h-singh
+repository-code: "https://github.com/navdeep-h-singh/video-to-llm"
+url: "https://github.com/navdeep-h-singh/video-to-llm"
+abstract: >-
+  A localhost-only tool that turns hours of local video into one chronological,
+  timestamped document an LLM can read — speech, marked silences, and optionally
+  what was on screen, in the order it happened. Every line carries a timestamp
+  that resolves back to the exact frame behind it, so a claim a model makes can
+  be checked against the picture it came from. Processing happens once and the
+  result is reused for every later question. Nothing is uploaded: the interface
+  binds loopback, descriptions are off by default, and a job that leaves them
+  off makes no network request at all.
+keywords:
+  - video
+  - transcription
+  - whisper
+  - ffmpeg
+  - local-first
+  - privacy
+  - offline
+  - large language models
+  - retrieval augmented generation
+  - qualitative research
+  - provenance
+license: MIT
+version: 1.0.0
+date-released: "2026-08-22"

@@ -1,0 +1,36 @@
+name: Bug report
+description: Something behaved differently from what it said it would
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        On Windows or Linux, please use the **Windows or Linux report** template
+        instead — it asks for the few extra details those platforms need.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what happened, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `video-to-llm doctor`
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: "`video-to-llm --version`, or the commit you are on."
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Anything the job's event log said
+      description: The job screen shows it, and it usually names the stage that failed. Redact anything you would rather not publish — the application redacts keys and paths in its own messages, but it cannot redact what you paste.
+      render: text

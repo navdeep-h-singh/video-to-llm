@@ -1,0 +1,34 @@
+# Kept deliberately quiet. This project pins through `uv.lock`, and a stream of
+# individual dependency bumps on a repository with one maintainer is noise that
+# buries the reports that matter. Monthly, grouped, and only where an update is
+# something a human should look at.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci"
+
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    groups:
+      # One PR for the whole runtime, one for the tooling. A pipeline that
+      # depends on FFmpeg, faster-whisper and ctranslate2 either works together
+      # or does not, so they are worth reviewing together.
+      runtime:
+        dependency-type: "production"
+      development:
+        dependency-type: "development"
+    open-pull-requests-limit: 2
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "monthly"
