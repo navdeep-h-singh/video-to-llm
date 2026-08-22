@@ -15,7 +15,7 @@
 # The named volume matters: without it the transcription model is downloaded
 # again on every run, and so is every frame you extracted last time.
 
-FROM python:3.12-slim AS base
+FROM python:3.14-slim AS base
 
 # ffmpeg and ffprobe are the only system dependencies. `--no-install-recommends`
 # keeps this from dragging in an X stack for a headless image.
