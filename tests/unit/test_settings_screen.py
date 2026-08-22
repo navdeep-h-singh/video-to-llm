@@ -11,6 +11,9 @@ in `tests/integration/test_live_ollama.py`.
 
 from __future__ import annotations
 
+import tomllib
+from pathlib import Path
+
 import pytest
 from fastapi import Request
 from fastapi.testclient import TestClient
@@ -73,11 +76,20 @@ def test_settings_round_trip_through_a_file(tmp_path, monkeypatch):
 
 def test_the_output_root_survives_a_save(tmp_path):
     # Losing it would silently reset the application to first-run.
+    #
+    # Asserted on the parsed value rather than on the raw text. A Windows path
+    # is full of backslashes, TOML requires them escaped, and the writer escapes
+    # them correctly — so searching the file for the unescaped string fails on
+    # Windows while the setting itself is perfectly intact. This test passed on
+    # macOS for months because a POSIX path has nothing to escape, and all three
+    # Windows cells failed on it during the first CI run that got far enough to
+    # run tests at all.
     target = tmp_path / "settings.toml"
-    original = Settings().with_output_root(tmp_path / "chosen")
-    save_settings(original, path=target)
+    chosen = tmp_path / "chosen"
+    save_settings(Settings().with_output_root(chosen), path=target)
 
-    assert str(tmp_path / "chosen") in target.read_text(encoding="utf-8")
+    written = tomllib.loads(target.read_text(encoding="utf-8"))
+    assert Path(written["general"]["output_root"]) == chosen
 
 
 def test_an_invalid_configuration_is_refused_before_it_is_written(tmp_path):
@@ -599,7 +611,9 @@ def test_the_output_folder_can_be_repointed(client, settings_path, tmp_path):
 
     client.post("/settings/storage", data={"output_root": str(elsewhere), "port": "8712"})
 
-    assert f'output_root = "{elsewhere}"' in settings_path.read_text(encoding="utf-8")
+    # Parsed, not matched as text — see `test_the_output_root_survives_a_save`.
+    written = tomllib.loads(settings_path.read_text(encoding="utf-8"))
+    assert Path(written["general"]["output_root"]) == elsewhere
 
 
 def test_repointing_the_output_folder_moves_nothing(client, settings, tmp_path):
