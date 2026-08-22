@@ -118,11 +118,25 @@ extend-immutable-calls = [
 "scripts/**" = ["S"]
 
 [tool.mypy]
+# Checked against the floor, not against whatever is running. Supporting 3.11
+# means 3.11 is the version the syntax has to be valid for, and letting mypy
+# follow the interpreter would quietly stop testing that on a newer machine.
 python_version = "3.11"
 warn_unused_configs = true
 disallow_untyped_defs = false
 ignore_missing_imports = true
 exclude = ["^tests/fixtures/"]
+
+# numpy arrives through faster-whisper and is never imported here. Its stubs
+# use PEP 695 `type` statements, which are 3.12 syntax, so parsing them against
+# the 3.11 floor above is a syntax error that stops the whole run — on 3.13 the
+# resolver picks numpy 2.5.2, where 3.11 gets 2.4.6 and the problem does not
+# exist. Six of the nine CI cells would have failed here on a check that says
+# nothing about this code.
+[[tool.mypy.overrides]]
+module = ["numpy", "numpy.*"]
+follow_imports = "skip"
+follow_imports_for_stubs = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
