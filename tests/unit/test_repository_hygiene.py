@@ -134,3 +134,74 @@ def test_no_tracked_file_carries_a_real_api_key_shape():
         if "sk-ant-api" in text or "BEGIN RSA PRIVATE KEY" in text:
             offenders.append(path)
     assert not offenders, f"credential-shaped literals in: {offenders}"
+
+
+# ── Every module that ships has to be in the repository ───────────────────
+#
+# `.gitignore` carried `collections/` to keep processed output out of the
+# repository. Unanchored, it also matched `app/collections/`, so the four source
+# files that build collections were never committed and never shipped in the
+# wheel. Nothing noticed: the whole suite passes locally because the files are
+# on disk, and it took the container job on the first CI run to surface
+# `ModuleNotFoundError: No module named 'app.collections'` from an installed
+# copy. These assert the property that was silently false.
+
+
+def _tracked_files() -> set[str]:
+    result = subprocess.run(
+        ["git", "ls-files"], cwd=REPO, capture_output=True, text=True, check=True
+    )
+    return set(result.stdout.split())
+
+
+def test_every_python_package_under_app_is_tracked():
+    """A package git does not know about cannot be installed by anyone else."""
+    tracked = _tracked_files()
+    missing = []
+    for init in sorted((REPO / "app").rglob("__init__.py")):
+        if "__pycache__" in init.parts:
+            continue
+        relative = init.relative_to(REPO).as_posix()
+        if relative not in tracked:
+            missing.append(relative)
+    assert not missing, (
+        "these packages exist on disk but are not in the repository, so an "
+        f"installed copy will not have them: {missing}"
+    )
+
+
+def test_no_source_file_under_app_is_ignored():
+    """Catches the pattern rather than the one instance of it.
+
+    An output-directory name that also names a source directory is an easy
+    mistake to repeat — `frames/`, `exports/` and `analysis_input/` are all in
+    `.gitignore` for the same reason `collections/` was.
+    """
+    sources = [
+        path
+        for path in (REPO / "app").rglob("*")
+        if path.is_file()
+        and path.suffix in {".py", ".html", ".css", ".sql"}
+        and "__pycache__" not in path.parts
+    ]
+    assert sources, "no source files found — the glob is wrong, not the repository"
+
+    result = subprocess.run(
+        ["git", "check-ignore", "--stdin"],
+        cwd=REPO,
+        input="\n".join(str(p.relative_to(REPO).as_posix()) for p in sources),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    ignored = [line for line in result.stdout.split() if line]
+    assert not ignored, f"source files under app/ that git is ignoring: {ignored}"
+
+
+def test_the_collections_module_is_importable_by_name():
+    """The specific regression. `app.collections` is a headline feature and was
+    absent from every installed copy."""
+    import importlib
+
+    for name in ("app.collections", "app.collections.build", "app.collections.model"):
+        assert importlib.import_module(name) is not None

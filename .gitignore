@@ -87,6 +87,14 @@ processed/
 exports/
 export/
 collections/
+
+# ...but `collections/` above is an *output* directory name, and an unanchored
+# pattern matches anywhere. It silently swallowed `app/collections/` — the
+# module that builds collections — so four source files were never committed,
+# never shipped in the wheel, and `import app.collections` failed on every
+# installed copy while passing locally, where the files are simply on disk.
+# Found by the container job on the very first CI run.
+!app/collections/
 analysis_input/
 frames/
 frames_api/

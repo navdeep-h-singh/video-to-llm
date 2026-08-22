@@ -8,7 +8,7 @@
 
 <p align="center">
   <img src="https://img.shields.io/badge/python-3.11%20|%203.12%20|%203.13-blue" alt="Python 3.11 to 3.13">
-  <img src="https://img.shields.io/badge/tests-1%2C575-brightgreen" alt="1,575 tests">
+  <img src="https://img.shields.io/badge/tests-1%2C578-brightgreen" alt="1,578 tests">
   <img src="https://img.shields.io/badge/network-not%20required-ec3013" alt="Runs offline">
   <img src="https://img.shields.io/badge/licence-MIT-lightgrey" alt="MIT licence">
 </p>
