@@ -1,6 +1,6 @@
 [project]
 name = "video-to-llm"
-version = "1.0.0"
+version = "1.0.0rc1"
 description = "Turn hours of local video into timestamped, citable, LLM-ready text. Fully offline. Resumable."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
@@ -87,7 +87,10 @@ packages = ["app"]
 # The skill and the docs ship with the source distribution: a skill host that
 # vendors from sdist needs SKILL.md, and the limitations in docs/ are part of
 # what the package claims about itself.
-include = ["app", "config", "docs", "skills", "scripts", "README.md", "LICENSE"]
+include = [
+    "app", "config", "docs", "skills", "scripts",
+    "README.md", "LICENSE", "CHANGELOG.md", "CITATION.cff", "server.json",
+]
 
 [tool.ruff]
 line-length = 100
