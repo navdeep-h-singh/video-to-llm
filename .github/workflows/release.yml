@@ -32,18 +32,18 @@ jobs:
 
       - run: uv sync --locked --extra dev
 
-      - run: uv run ruff format --check .
-      - run: uv run ruff check .
-      - run: uv run mypy app
-      - run: uv run pytest -q --deselect tests/integration/test_live_ollama.py
-      - run: uv run python scripts/pre_publish_audit.py --release
-      - run: uv run video-to-llm smoke-test
+      - run: uv run --no-sync ruff format --check .
+      - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync mypy app
+      - run: uv run --no-sync pytest -q --deselect tests/integration/test_live_ollama.py
+      - run: uv run --no-sync python scripts/pre_publish_audit.py --release
+      - run: uv run --no-sync video-to-llm smoke-test
 
       - name: The version in the tag matches the version in the package
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
           tagged="${GITHUB_REF_NAME#v}"
-          packaged="$(uv run python -c 'import tomllib,pathlib;print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
+          packaged="$(uv run --no-sync python -c 'import tomllib,pathlib;print(tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["version"])')"
           if [ "$tagged" != "$packaged" ]; then
             echo "Tag $GITHUB_REF_NAME does not match pyproject version $packaged" >&2
             exit 1
