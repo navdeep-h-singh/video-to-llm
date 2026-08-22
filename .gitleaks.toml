@@ -14,8 +14,21 @@ tags = ["key", "generic"]
 [[rules]]
 id = "non-loopback-ollama-endpoint"
 description = "Ollama endpoint pointing somewhere other than the loopback interface"
-regex = '''(?i)ollama[_\-]?(endpoint|host|url)\s*[:=]\s*["']?https?://(?!127\.0\.0\.1|localhost|\[::1\])[^\s"']+'''
+# Expressed as "match every Ollama endpoint, then allow the loopback ones"
+# rather than as a negative lookahead. gitleaks compiles with Go's RE2, which
+# has no lookahead at all: the previous form panicked the binary outright, so
+# the secret scan was not merely failing — it never ran a single rule.
+regex = '''(?i)ollama[_\-]?(endpoint|host|url)\s*[:=]\s*["']?https?://[^\s"']+'''
 tags = ["config", "localhost-only"]
+
+  [rules.allowlist]
+  description = "Loopback is the only endpoint this application may name"
+  # Against the whole line, not the captured secret. gitleaks matches an
+  # allowlist regex against the *secret* by default, and the secret here is the
+  # variable name — so the loopback address sitting right next to it was never
+  # what got tested, and `.env.example`'s documented default was reported.
+  regexTarget = "line"
+  regexes = ['''(?i)https?://(127\.0\.0\.1|localhost|\[::1\])''']
 
 [[rules]]
 id = "absolute-home-path"
@@ -47,7 +60,10 @@ regexes = [
     '''(?i)env_var\s*=\s*["'][A-Z_]+["']''',
     '''(?i)keyring_(service|account)\s*=''',
     # Runs of a single repeated character are placeholder shapes, never values.
-    '''([A-Za-z0-9])\1{15,}''',
+    # Enumerated rather than written as `([A-Za-z0-9])\\1{15,}`: RE2 has no
+    # backreferences, and that form panicked the binary before any rule ran.
+    # Only the characters people actually pad placeholders with are listed.
+    '''(x{16,}|X{16,}|a{16,}|A{16,}|z{16,}|Z{16,}|0{16,}|1{16,}|9{16,}|\.{16,}|\*{16,}|-{16,}|_{16,})''',
     # The documented loopback default.
     '''http://127\.0\.0\.1:11434''',
 ]
