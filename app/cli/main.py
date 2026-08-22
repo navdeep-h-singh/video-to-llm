@@ -87,6 +87,55 @@ def cmd_status(args: argparse.Namespace) -> int:
         for row in rows:
             name = row["name"][:32]
             print(f"{name:<34} {row['status']:<22} {row['updated_at']}")
+
+        # The line above is ordered by recency, which says nothing about what
+        # runs when. A queue of one is not a queue and does not need explaining.
+        from app.services.jobs import queue_order
+
+        waiting = queue_order(connection)
+        if len(waiting) > 1:
+            print("\nQueue, in the order it will run:")
+            for position, row in enumerate(waiting, start=1):
+                print(f"  {position}. {row['name'][:40]}  ({row['status']})")
+            print("\nUse `video-to-llm run-next <job>` to move one to the front.")
+    finally:
+        connection.close()
+    return 0
+
+
+def cmd_run_next(args: argparse.Namespace) -> int:
+    """Move a job to the front of the queue."""
+    from app.core.db import database_path, open_database
+    from app.services.citation import CitationError, find_job
+    from app.services.jobs import run_next
+
+    settings = _resolve_settings(args)
+    root = settings.output_root
+    assert root is not None
+
+    if not database_path(root).exists():
+        print("No jobs yet.", file=sys.stderr)
+        return 1
+
+    connection = open_database(root, migrate_on_open=False)
+    try:
+        try:
+            job = find_job(connection, args.job)
+        except CitationError as error:
+            print(str(error), file=sys.stderr)
+            return 1
+
+        if not run_next(connection, job["id"]):
+            status = connection.execute(
+                "SELECT status FROM jobs WHERE id = ?", (job["id"],)
+            ).fetchone()["status"]
+            print(
+                f"'{job['name']}' is {status} — it is not waiting for the worker, "
+                "so there is no queue to move it up.",
+                file=sys.stderr,
+            )
+            return 1
+        print(f"'{job['name']}' runs next.")
     finally:
         connection.close()
     return 0
@@ -549,6 +598,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("doctor", help="Check this computer is ready").set_defaults(func=cmd_doctor)
     sub.add_parser("status", help="Show jobs and worker health").set_defaults(func=cmd_status)
+
+    run_next_parser = sub.add_parser(
+        "run-next",
+        help="Move a job to the front of the queue",
+        description="The worker runs one job at a time. This puts the named job at the "
+        "front of the line; a job already running steps aside at its next safe point and "
+        "keeps everything it has finished.",
+    )
+    run_next_parser.add_argument("job", help="Job name or identifier")
+    run_next_parser.set_defaults(func=cmd_run_next)
     sub.add_parser("smoke-test", help="End-to-end run on generated media, no network").set_defaults(
         func=cmd_smoke_test
     )

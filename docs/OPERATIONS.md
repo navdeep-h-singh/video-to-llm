@@ -22,7 +22,8 @@ claim catches network filesystems where advisory locking is unreliable.
 | `start-ui` | Interface only |
 | `run-worker` | Worker only. `--once` processes what is waiting, then exits |
 | `doctor` | Is this computer ready, and what is missing |
-| `status` | Jobs and worker health, without opening a browser |
+| `status` | Jobs and worker health, and the queue in the order it will run |
+| `run-next <job>` | Move a job to the front of the queue |
 | `smoke-test` | Twelve end-to-end checks on generated media, no network |
 | `import <path>` | Bring previously processed output under management |
 
@@ -38,6 +39,23 @@ checks before every batch, so on a paid provider nothing further is sent once
 you have asked it to stop. Taking pictures and writing the transcript are single
 FFmpeg and Whisper calls that run to the end of the current video before the
 pause lands.
+
+**Run next** moves a job to the front of the queue. The worker runs one job at
+a time, oldest first, and a job queued behind a long one used to wait for the
+whole thing — a thirteen-video job once sat untouched for hours behind a single
+video being described locally. Now the job in front steps aside at its next safe
+point, goes back to *Ready to start*, and keeps its place; when the promoted job
+finishes it picks up exactly where it stopped. Nothing is thrown away and
+nothing is described twice, because completed stages and paid-for batches are
+already recorded.
+
+The safe points are the same ones a pause uses: between videos, between stages,
+and between description batches. Taking pictures and writing a transcript are
+single FFmpeg and Whisper calls, so a job in either of those finishes the
+current video first.
+
+Only ever by request. Nothing reorders itself, so two jobs cannot take turns
+pushing each other aside.
 
 **Cancel** stops for good — and still keeps everything already produced.
 Cancelling is not undoing. Frames, transcripts, and descriptions on disk cost

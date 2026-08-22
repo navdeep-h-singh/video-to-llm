@@ -113,7 +113,7 @@ Then press "Try it with a generated sample".
 Browser (127.0.0.1 only)
    └── FastAPI + Jinja2 + plain CSS   app/web/
          ├── origin boundary          one middleware, before every route
-         ├── SQLite WAL               app/core/db.py, migrations/ (001–003)
+         ├── SQLite WAL               app/core/db.py, migrations/ (001–004)
          ├── artifacts on disk        app/core/artifacts.py
          └── separate worker process  app/worker/
                ├── FFmpeg + faster-whisper
@@ -460,14 +460,21 @@ hours of description work. §5E is the mitigation, not a cure.
   underlying growth is unaddressed.
 - **`/settings` shells out to `ffmpeg -version` on every render** (capped at
   10 s), so it can be slow under heavy load.
-- **One job at a time, and no way to jump the queue.** `claim_next_job` takes
-  the single oldest `ready` job (`app/worker/runner.py:178`) and `process_job`
-  does not return until every video in it is done. A job queued behind a long
-  one waits for the whole thing. Observed 2026-08-12: a 13-video job sat at
-  `ready` with `started_at` NULL while a one-video job ahead of it ground
-  through local descriptions, and only started when that job left the loop.
-  This is the pause bug's twin — both come from the worker treating a claimed
-  job as uninterruptible. See §8.
+- ~~**One job at a time, and no way to jump the queue.**~~ **The second half
+  fixed 22 August 2026.** Jobs carry a `priority` (migration 004, default 0, so
+  an untouched queue still runs oldest-first) and `run_next` puts one at the
+  front — from the job screen, or `video-to-llm run-next <job>`. A running job
+  consults `outranked_by` at the same checkpoints a pause uses, and steps aside
+  at the first one: back to `ready`, its in-flight video back to `pending`, its
+  place in the queue kept, resuming later from exactly where it stopped. That
+  last part is what makes it safe, and it is asserted on real media —
+  interrupting a job costs one re-entry into a completed stage, not one
+  re-extraction. Covered by `tests/unit/test_worker_queue.py`.
+
+  **Still one job at a time**, and deliberately: transcription and local
+  description are CPU- and GPU-bound, so two at once would thrash rather than
+  overlap, and the worker claim is exclusive per output root by design.
+  Concurrency is not the fix for what was observed and is not planned.
 - ~~**Pausing a running job does nothing until its current video ends.**~~
   **Fixed 21 August 2026.** `Worker.halt_requested` re-reads `jobs.status` and
   is consulted between videos, between stages, and — via the `should_stop`
@@ -502,11 +509,11 @@ hours of description work. §5E is the mitigation, not a cure.
 `docs/LAUNCH_CHECKLIST.md` is the full list, sequenced. The short version, in
 order of value:
 
-1. ~~**Make pause actually pause.**~~ **Done 21 August 2026** — see §7. The
-   remaining half of that worker assumption is the queue: `process_job` still
-   does not return until every video in the job is done, so a job queued behind
-   a long one waits for the whole thing. The pause fix does not address that,
-   and it is now the oldest live item here.
+1. ~~**Make pause actually pause.**~~ **Done 21 August 2026** — see §7.
+   ~~The queue half of that same worker assumption.~~ **Done 22 August 2026**:
+   jobs can be moved to the front, and the job in front steps aside at its next
+   safe point. Both came from the same place — the worker treating a claimed job
+   as uninterruptible — and both are now checkpoint reads.
 2. **Get a git remote and let CI run.** The highest-value thing nobody can do
    from a laptop. Nine test cells, an installed-wheel job, and a container build
    have never executed. Expect Windows to surface something.

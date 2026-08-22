@@ -218,6 +218,7 @@ def test_the_schema_lives_inside_the_installed_package():
         "001_initial.sql",
         "002_completion_acknowledgement.sql",
         "003_job_folder_name.sql",
+        "004_job_priority.sql",
     ]
 
 

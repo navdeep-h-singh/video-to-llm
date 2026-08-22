@@ -44,11 +44,22 @@
         {%- else %} · took {{ elapsed }}{% endif %}
       {%- endif %}
       {%- if total_size %} · {{ total_size }} on disk{% endif %}
+      {%- if queue_position > 1 %} · {{ queue_position }} of {{ queue_length }} in the queue,
+        behind “{{ ahead_name }}”{% endif %}
     </p>
   </div>
   <div class="actions">
     {{ status(job_status) }}
     {% if job.status in ("ready", "preparing", "transcribing", "analyzing", "waiting_retry") %}
+      {#
+        Only when there is a queue and this job is not already at its front.
+        A control that cannot change anything is worse than no control.
+      #}
+      {% if queue_length > 1 and queue_position > 1 %}
+        <form method="post" action="/jobs/{{ job.id }}/run-next" style="display:inline">
+          <button class="btn btn-secondary" type="submit">Run next</button>
+        </form>
+      {% endif %}
       <form method="post" action="/jobs/{{ job.id }}/pause" style="display:inline">
         <button class="btn btn-secondary" type="submit">Pause</button>
       </form>

@@ -771,6 +771,18 @@ def create_app(settings: Settings) -> FastAPI:
                     (job_id,),
                 ).fetchall()
             ]
+
+            # Where this job sits in the line, and what is in front of it. Only
+            # offered when there is genuinely a queue: "Run next" on the only
+            # job waiting is a button that cannot do anything.
+            from app.services.jobs import queue_order
+
+            queue = queue_order(connection)
+            queue_position = next(
+                (index + 1 for index, row in enumerate(queue) if row["id"] == job_id), 0
+            )
+            queue_length = len(queue)
+            ahead_name = str(queue[0]["name"]) if queue and queue_position > 1 else ""
         finally:
             if connection is not None:
                 connection.close()
@@ -796,6 +808,9 @@ def create_app(settings: Settings) -> FastAPI:
             events=events,
             elapsed=status_module.format_elapsed(job["started_at"], job["completed_at"]),
             total_size=total_size,
+            queue_position=queue_position,
+            queue_length=queue_length,
+            ahead_name=ahead_name,
             problems=problems or [],
         )
 
@@ -1345,6 +1360,12 @@ def create_app(settings: Settings) -> FastAPI:
         from app.services.jobs import cancel_job
 
         return job_control(request, job_id, cancel_job, "stopped")
+
+    @app.post("/jobs/{job_id}/run-next")
+    def run_next_route(request: Request, job_id: str) -> Response:
+        from app.services.jobs import run_next
+
+        return job_control(request, job_id, run_next, "moved up the queue")
 
     def ordered_selection(order: str, video: list[str], version: list[str]) -> list[str]:
         """Turn the form's choices into job_video_ids, in the user's own order.

@@ -80,6 +80,40 @@ class JobHalted(Exception):
         self.status = status
 
 
+class JobYielded(Exception):
+    """Raised inside a job that should go back in the queue rather than finish.
+
+    Also not a failure, and distinct from a halt: this job still wants to run.
+    It goes back to 'ready' and keeps its place in the queue, and resumes from
+    the same point whenever the worker reaches it again — which the stage
+    records and the completed batches on disk already make safe.
+
+    ``taken_over_by`` names the job the user moved ahead. None means the stage
+    put itself down and by the time it did, whatever asked for that had been
+    withdrawn — the video is still unfinished either way, so it goes round
+    again rather than being assembled from a partial description set.
+    """
+
+    def __init__(self, taken_over_by: str | None = None):
+        super().__init__(
+            f"stepped aside for {taken_over_by}" if taken_over_by else "returned to the queue"
+        )
+        self.taken_over_by = taken_over_by
+
+
+def _step_aside_message(taken_over_by: str | None) -> str:
+    """What the job's own event log says about going back in the queue."""
+    if taken_over_by:
+        return (
+            f"Waiting while '{taken_over_by}' runs — you moved it ahead of this one. "
+            "Everything finished so far is kept, and this job picks up where it stopped."
+        )
+    return (
+        "Stopped partway and went back in the queue. Everything finished so far is kept, "
+        "and this job picks up where it stopped."
+    )
+
+
 def _job_folder(job: sqlite3.Row) -> str:
     """The folder a job's output belongs in, by name where one was recorded."""
     try:
@@ -197,11 +231,15 @@ class Worker:
             thread.join(timeout=HEARTBEAT_INTERVAL_SECONDS)
 
     def claim_next_job(self) -> sqlite3.Row | None:
-        """Return the oldest job waiting for work, if any.
+        """Return the job that should run now, if any.
+
+        Highest priority first, oldest first within a priority. Every job starts
+        at priority 0, so a queue nobody has reordered runs in exactly the order
+        it was created, as it always did.
 
         When the worker is scoped to one job it considers only that job. A
         headless `process` run creates a job and then turns the loop once; if
-        that turn took the oldest *ready* job instead, a video queued earlier in
+        that turn took the front of the queue instead, a video queued earlier in
         the interface would run in its place — and where that job names a cloud
         service, the command would spend money on work the user did not just ask
         for. A one-shot run does the thing it was asked to do, or nothing.
@@ -212,8 +250,37 @@ class Worker:
                 (self.only_job_id,),
             ).fetchone()
         return self.connection.execute(
-            "SELECT * FROM jobs WHERE status = 'ready' ORDER BY created_at LIMIT 1"
+            "SELECT * FROM jobs WHERE status = 'ready'"
+            " ORDER BY priority DESC, created_at ASC LIMIT 1"
         ).fetchone()
+
+    def outranked_by(self, job: sqlite3.Row) -> sqlite3.Row | None:
+        """A waiting job the user has put ahead of this one, if there is one.
+
+        Strictly higher priority, never equal: two jobs at the same priority
+        must not be able to take turns pushing each other aside, and priority
+        only ever changes because somebody asked for it.
+
+        A one-shot run never steps aside. `video-to-llm process` was told to do
+        one particular thing, and abandoning it halfway to run something queued
+        in the interface is not a service to anybody standing at a terminal.
+        """
+        if self.only_job_id is not None:
+            return None
+        try:
+            return self.connection.execute(
+                "SELECT id, name FROM jobs WHERE status = 'ready' AND priority > ?"
+                " AND id <> ? ORDER BY priority DESC, created_at ASC LIMIT 1",
+                (int(job["priority"]), job["id"]),
+            ).fetchone()
+        except (sqlite3.Error, IndexError, KeyError) as error:
+            # Same reading as a failed halt check: a read that did not happen is
+            # not evidence that anything is waiting.
+            logger.warning(
+                "Could not check the queue: %s",
+                redacted_exception_text(error),
+            )
+            return None
 
     def halt_requested(self, job_id: str) -> str | None:
         """The status this job was asked to stop at, or None to keep going.
@@ -247,10 +314,27 @@ class Worker:
         status = str(row["status"])
         return status if status in HALTING_JOB_STATES else None
 
-    def _raise_if_halted(self, job_id: str) -> None:
-        halt = self.halt_requested(job_id)
+    def _checkpoint(self, job: sqlite3.Row) -> None:
+        """The one place the worker asks whether it should still be doing this.
+
+        Halt before yield, deliberately. If the user paused this job in the same
+        moment somebody moved another one ahead of it, the pause is the answer:
+        one is an instruction about this job and the other is a preference about
+        the queue.
+        """
+        halt = self.halt_requested(job["id"])
         if halt is not None:
             raise JobHalted(halt)
+
+        ahead = self.outranked_by(job)
+        if ahead is not None:
+            raise JobYielded(str(ahead["name"]))
+
+    def _should_stop_for(self, job: sqlite3.Row) -> bool:
+        """Whether a long stage should put itself down at the next safe point."""
+        if self.halt_requested(job["id"]) is not None:
+            return True
+        return self.outranked_by(job) is not None
 
     def process_job(self, job: sqlite3.Row) -> None:
         """Run every stage for every video in one job, in confirmed order."""
@@ -271,7 +355,7 @@ class Worker:
         failed = 0
         try:
             for video in videos:
-                self._raise_if_halted(job["id"])
+                self._checkpoint(job)
                 if not self.process_video(job, video):
                     failed += 1
         except JobHalted as halt:
@@ -284,8 +368,43 @@ class Worker:
                 halt.status,
             )
             return
+        except JobYielded as yielded:
+            self._step_aside(job, yielded)
+            return
 
         self._settle_job(job["id"], had_failures=failed > 0)
+
+    def _step_aside(self, job: sqlite3.Row, yielded: JobYielded) -> None:
+        """Put a job back in the queue rather than finishing it now.
+
+        Back to 'ready', not 'paused': nobody stopped this job, and a status the
+        user did not ask for is exactly the kind of lie the pause fix existed to
+        remove. The video in flight goes back to 'pending' so the next pass
+        picks it up — every stage it already finished is recorded, and every
+        description batch already paid for is on disk, so resuming costs nothing
+        beyond the part that was interrupted.
+        """
+        logger.info(
+            "Job %s returned to the queue (%s). It resumes where it stopped.",
+            job["id"][:8],
+            yielded,
+        )
+        self.connection.execute(
+            "UPDATE job_videos SET status = 'pending', updated_at = ? WHERE job_id = ?"
+            " AND status IN ('preparing', 'transcribing', 'analyzing')",
+            (utc_now(), job["id"]),
+        )
+        self._set_job_status(job["id"], "ready")
+        self.connection.execute(
+            "INSERT INTO events (job_id, level, kind, message, created_at) VALUES (?,?,?,?,?)",
+            (
+                job["id"],
+                "info",
+                "queue",
+                _step_aside_message(yielded.taken_over_by),
+                utc_now(),
+            ),
+        )
 
     def settings_for(self, job: sqlite3.Row) -> Settings:
         """The description choice this job was created with, not today's setting.
@@ -346,12 +465,13 @@ class Worker:
             interval_ms=interval_ms,
             # Consulted between description batches, which is the only place a
             # stage runs long enough — and spends enough — for the answer to
-            # matter within a single video.
-            should_stop=lambda: self.halt_requested(job["id"]) is not None,
+            # matter within a single video. Covers both reasons to put the work
+            # down: the user stopped this job, or moved another one ahead of it.
+            should_stop=lambda: self._should_stop_for(job),
         )
 
         try:
-            self._raise_if_halted(job["id"])
+            self._checkpoint(job)
             self._set_video_status(video["id"], "preparing")
             self._set_job_status(job["id"], "preparing")
             run_frames_stage(
@@ -359,29 +479,34 @@ class Worker:
                 make_api_copies=settings.visual_analysis.enabled,
             )
 
-            self._raise_if_halted(job["id"])
+            self._checkpoint(job)
             self._set_video_status(video["id"], "transcribing")
             self._set_job_status(job["id"], "transcribing")
             run_transcription_stage(context)
 
             had_gaps = False
             if settings.visual_analysis.enabled:
-                self._raise_if_halted(job["id"])
+                self._checkpoint(job)
                 self._set_video_status(video["id"], "analyzing")
                 self._set_job_status(job["id"], "analyzing")
                 result = run_visual_stage(context)
                 # The stage stops itself between batches when asked. Coming back
                 # here without finishing means the video is not finished either,
                 # so it must not fall through to assembly and a completed status.
+                # Which of the two reasons it was is decided here, by asking
+                # again — the stage only ever knew that it should stop.
                 if result.stopped_at_index is not None and not result.stopped_on_budget:
-                    raise JobHalted(self.halt_requested(job["id"]) or "paused")
+                    self._checkpoint(job)
+                    # Neither still applies: whatever asked for the stop was
+                    # withdrawn while the batch in flight finished.
+                    raise JobYielded()
                 had_gaps = result.has_gaps
 
-            self._raise_if_halted(job["id"])
+            self._checkpoint(job)
             # Assembly runs whatever happened above: a video with gaps, or with
             # no descriptions at all, still deserves its assembled document.
             run_assembly_stage(context, display_name=video["display_name"])
-        except JobHalted:
+        except (JobHalted, JobYielded):
             raise
         except Exception as error:
             # One unreadable video must not abandon the others in the job.

@@ -310,6 +310,57 @@ def test_a_finished_job_offers_neither(client, db):
     assert "/jobs/j1/cancel" not in body
 
 
+# ── Moving a job up the queue ─────────────────────────────────────────────
+
+
+def test_the_run_next_button_moves_a_job_to_the_front(client, db):
+    seed(db, job_id="j1", status="ready")
+    seed(db, job_id="j2", status="ready")
+
+    response = client.post("/jobs/j2/run-next", follow_redirects=False)
+
+    assert response.status_code == 303
+    assert (
+        db.execute("SELECT priority FROM jobs WHERE id='j2'").fetchone()["priority"]
+        > (db.execute("SELECT priority FROM jobs WHERE id='j1'").fetchone()["priority"])
+    )
+
+
+def test_run_next_is_offered_only_when_there_is_a_queue_to_move_up(client, db):
+    # The only job waiting is already the next one to run. A button that cannot
+    # change anything is worse than no button.
+    seed(db, job_id="j1", status="ready")
+    assert "/jobs/j1/run-next" not in client.get("/jobs/j1").text
+
+    seed(db, job_id="j2", status="ready")
+    assert "/jobs/j2/run-next" in client.get("/jobs/j2").text
+
+
+def test_the_job_at_the_front_is_not_offered_the_button(client, db):
+    seed(db, job_id="j1", status="ready")
+    seed(db, job_id="j2", status="ready")
+
+    assert "/jobs/j1/run-next" not in client.get("/jobs/j1").text
+
+
+def test_the_job_screen_says_what_it_is_waiting_behind(client, db):
+    seed(db, job_id="j1", status="ready")
+    seed(db, job_id="j2", status="ready")
+
+    body = client.get("/jobs/j2").text
+
+    assert "2 of 2 in the queue" in body
+
+
+def test_run_next_on_a_finished_job_says_why_not(client, db):
+    seed(db, job_id="j1", status="completed")
+
+    response = client.post("/jobs/j1/run-next", follow_redirects=False)
+
+    assert response.status_code == 409
+    assert "cannot be moved up the queue" in response.text
+
+
 def test_stopping_explains_that_work_is_kept(client, db):
     seed(db, status="analyzing")
     body = client.get("/jobs/j1").text

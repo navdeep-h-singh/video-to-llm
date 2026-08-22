@@ -57,6 +57,7 @@ DOCUMENTED_COMMANDS = {
     "run-worker",
     "doctor",
     "status",
+    "run-next",
     "smoke-test",
     "import",
 }

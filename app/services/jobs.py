@@ -28,6 +28,15 @@ CANCELLABLE = frozenset(
     {"draft", "ready", "preparing", "transcribing", "analyzing", "waiting_retry", "paused"}
 )
 
+#: States a job still has work ahead of it in, and can therefore be moved up the
+#: queue from. A finished job has no place in a queue, and a paused one is not
+#: waiting for the worker — it is waiting for the user.
+QUEUEABLE = ("ready", "preparing", "transcribing", "analyzing", "waiting_retry")
+
+#: The same list as SQL, written out so the queries below stay plain literals.
+#: `test_worker_queue.py` asserts the two agree.
+_QUEUEABLE_SQL = "('ready', 'preparing', 'transcribing', 'analyzing', 'waiting_retry')"
+
 
 #: Longest job name accepted. Names are shown in the list, on the job screen,
 #: in the collection picker, and in the browser tab title — an uncapped name
@@ -204,6 +213,52 @@ def pause_job(connection: sqlite3.Connection, job_id: str) -> bool:
         "Paused. Everything finished so far is kept, and the job picks up from where it stopped.",
     )
     return True
+
+
+def run_next(connection: sqlite3.Connection, job_id: str) -> bool:
+    """Move a job to the front of the queue. False when it has no queue to be in.
+
+    The worker runs one job at a time and, until this existed, took the oldest
+    `ready` job and did not come back until every video in it was finished. That
+    is fine when the queue is short and ruinous when it is not: a thirteen-video
+    job sat untouched for hours behind a single video being described locally,
+    and there was no way to say "do mine first" short of cancelling.
+
+    Already at the front is success, not a failure. The user asked for this job
+    to run next; it is running next. Reporting "cannot" for a request that is
+    already satisfied is the kind of answer that makes people press the button
+    again.
+    """
+    row = connection.execute("SELECT status, priority FROM jobs WHERE id = ?", (job_id,)).fetchone()
+    if row is None or row["status"] not in QUEUEABLE:
+        return False
+
+    highest = connection.execute(
+        "SELECT COALESCE(MAX(priority), 0) AS top FROM jobs WHERE id <> ? AND status IN"
+        " ('ready', 'preparing', 'transcribing', 'analyzing', 'waiting_retry')",
+        (job_id,),
+    ).fetchone()
+
+    # Strictly above everything else waiting, so ties never leave the answer to
+    # `created_at` when the user has been explicit.
+    if row["priority"] > int(highest["top"]):
+        return True
+
+    connection.execute(
+        "UPDATE jobs SET priority = ?, updated_at = ? WHERE id = ?",
+        (int(highest["top"]) + 1, utc_now(), job_id),
+    )
+    _record(connection, job_id, "Moved to the front of the queue. This job runs next.")
+    return True
+
+
+def queue_order(connection: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Jobs waiting for or holding the worker, in the order they will run."""
+    return connection.execute(
+        "SELECT id, name, status, priority FROM jobs WHERE status IN"
+        " ('ready', 'preparing', 'transcribing', 'analyzing', 'waiting_retry')"
+        " ORDER BY priority DESC, created_at ASC"
+    ).fetchall()
 
 
 def resume_job(connection: sqlite3.Connection, job_id: str) -> bool:
