@@ -42,11 +42,11 @@ the output. Once you do, drop the flag:
 uvx video-to-llm process lecture.mp4
 ```
 
-> **What is on PyPI today is `1.0.0rc1`, and there is no stable release yet.**
-> Because it is the only version on the index, `uvx` and `pip` will install it
-> rather than refusing — so the command above works, and what it gives you is a
-> release candidate. CI has not run on it, and no part of it has ever executed
-> on Windows or Linux. Read *Known limitations* before you rely on anything here.
+> **Not installable from PyPI yet.** The name is registered, but there is
+> nothing on the index worth installing: the one release published, `1.0.0rc1`,
+> went out missing the collections module and has been withdrawn. Until 1.0.0
+> lands, clone the repository and run `uv sync`, then
+> `uv run video-to-llm process lecture.mp4 --transcribe-model tiny`.
 
 You need [FFmpeg](https://ffmpeg.org) on your `PATH` — version 4 through 9, all
 fine. The speech model downloads once, on first use, and after that nothing
