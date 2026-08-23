@@ -32,3 +32,13 @@ updates:
     directory: "/"
     schedule:
       interval: "monthly"
+    ignore:
+      # The base image has to stay inside `requires-python` in pyproject.toml,
+      # which is `>=3.11,<3.14`. Dependabot cannot see that constraint and
+      # opened a PR moving the container to 3.14-slim, where `uv sync` would
+      # refuse to resolve at all. Lift this the moment the ceiling moves —
+      # it is a pin against a stale constraint, not against new Pythons.
+      - dependency-name: "python"
+        update-types:
+          - "version-update:semver-major"
+          - "version-update:semver-minor"
