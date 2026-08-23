@@ -7,6 +7,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/navdeep-h-singh/video-to-llm/actions/workflows/ci.yml"><img src="https://github.com/navdeep-h-singh/video-to-llm/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/python-3.11%20|%203.12%20|%203.13-blue" alt="Python 3.11 to 3.13">
   <img src="https://img.shields.io/badge/tests-1%2C578-brightgreen" alt="1,578 tests">
   <img src="https://img.shields.io/badge/network-not%20required-ec3013" alt="Runs offline">
@@ -262,11 +263,15 @@ Carried here deliberately rather than left for you to discover.
 - **No cloud provider has been exercised against a live service.** Five adapters
   are verified against documented request and response shapes; local Ollama is
   verified live against 0.32.6 with `qwen2.5vl:7b`.
-- **Windows and Linux have never executed this code.** Development was entirely
-  on macOS (Apple Silicon). The CI matrix covers all three operating systems and
-  all three Python versions, but it has not run yet — there is no remote. Paths,
-  keyring backends, symlink and hard-link fallbacks are written defensively and
-  unit-tested, and nothing more than that should be assumed.
+- **Nobody has used this on Windows or Linux, though CI now runs there.**
+  Development was entirely on macOS (Apple Silicon). The full suite passes on
+  all three operating systems and all three Python versions, the built wheel is
+  installed and exercised outside the checkout on each, and the container runs
+  the pipeline end to end with no network. That is a real floor and it is not
+  the same as use: a green matrix says the paths, keyring backends and
+  symlink fallbacks work on a clean runner, not that they work on your machine
+  with your files. Reports from either are the most useful thing this project
+  can receive.
 - **The container ships the command line, not the interface** — the interface
   binds loopback, which inside a container is unreachable from the host.
 - **No URL downloading.** Local files only. Fetch it yourself first.

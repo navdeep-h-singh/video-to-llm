@@ -68,10 +68,6 @@ def test_every_command_shown_in_the_readme_parses(argv):
 #: (pattern, why it is embargoed). Delete an entry in the commit that earns it.
 EMBARGOED = [
     (
-        re.compile(r"\bCI[- ](?:is )?(?:green|passing)\b", re.IGNORECASE),
-        "CI has never executed — there is no git remote",
-    ),
-    (
         re.compile(r"\b(?:verified|tested) (?:live )?against (?:Claude|OpenAI|Gemini)\b", re.I),
         "no cloud provider has ever been called against a real service",
     ),
@@ -99,7 +95,11 @@ def test_the_limitations_section_survives():
     assert "## Known limitations" in text
     for required in (
         "Transcription accuracy is unmeasured",
-        "never executed this code",
+        # Was "never executed this code" until CI ran green on all three
+        # operating systems. The limitation did not disappear when that
+        # happened, it narrowed: a clean runner passing is not somebody's real
+        # machine passing, and the README has to keep saying so.
+        "Nobody has used this on Windows or Linux",
         "No cloud provider has been exercised against a live service",
     ):
         assert required in text, f"the limitations section no longer mentions: {required}"
