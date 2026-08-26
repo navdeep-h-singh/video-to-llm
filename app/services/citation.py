@@ -223,6 +223,32 @@ def resolve_citation(
         connection.close()
 
 
+def shorten_home(path: Path | str) -> str:
+    """Render a path with the home directory as `~`.
+
+    Shorter to read, and it keeps the operator's account name out of output
+    people paste into issues and posts. A path outside home is returned
+    unchanged rather than mangled, and an unresolvable home — which happens on
+    a stripped environment — falls back to the path as given rather than
+    raising in the middle of printing a result.
+    """
+    text = str(path)
+    try:
+        home = Path.home()
+        candidates = {str(home), str(home.resolve())}
+    except (RuntimeError, OSError):
+        return text
+
+    # Both the raw and the resolved home, because they differ whenever the home
+    # directory is reached through a symlink — /tmp on macOS resolves to
+    # /private/tmp, and some sites symlink /home. Comparing only one of them
+    # silently stops shortening on exactly those machines.
+    for prefix in sorted(candidates, key=len, reverse=True):
+        if prefix and prefix != "/" and (text == prefix or text.startswith(prefix + "/")):
+            return "~" + text[len(prefix) :]
+    return text
+
+
 def format_citation(citation: Citation) -> str:
     """The terminal rendering. One screen, the picture path last so it is easy
     to copy."""
@@ -258,7 +284,7 @@ def format_citation(citation: Citation) -> str:
             drift = citation.frame_seconds - citation.seconds
             if abs(drift) >= 0.5:
                 offset = f"  (taken at {clock(citation.frame_seconds)})"
-        lines.append(f"Picture: {citation.frame_path}{offset}")
+        lines.append(f"Picture: {shorten_home(citation.frame_path)}{offset}")
     elif citation.frame_seconds is not None:
         lines.append("Picture: recorded in the manifest but no longer on disk.")
     else:

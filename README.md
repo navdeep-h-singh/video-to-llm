@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/navdeep-h-singh/video-to-llm/actions/workflows/ci.yml"><img src="https://github.com/navdeep-h-singh/video-to-llm/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/python-3.11%20|%203.12%20|%203.13-blue" alt="Python 3.11 to 3.13">
-  <img src="https://img.shields.io/badge/tests-1%2C577-brightgreen" alt="1,577 tests">
+  <img src="https://img.shields.io/badge/tests-1%2C582-brightgreen" alt="1,582 tests">
   <img src="https://img.shields.io/badge/network-not%20required-ec3013" alt="Runs offline">
   <img src="https://img.shields.io/badge/licence-MIT-lightgrey" alt="MIT licence">
 </p>

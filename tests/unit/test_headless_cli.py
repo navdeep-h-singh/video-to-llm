@@ -21,6 +21,7 @@ A failure here is a regression.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -471,3 +472,65 @@ def test_speech_precedes_the_picture_taken_at_the_same_second(job_on_disk):
 def test_an_unprocessed_folder_refuses_to_export(tmp_path):
     with pytest.raises(ExportError):
         export_video_dir(tmp_path, "json")
+
+
+# ── The path people paste into issues ─────────────────────────────────────
+#
+# `show` prints the frame path as the last line, which is the line that ends up
+# in bug reports, forum posts and screen recordings. An absolute path carries
+# the operator's account name into all three for no benefit.
+
+
+def test_a_frame_path_inside_home_is_shortened(monkeypatch, tmp_path):
+    from app.services.citation import shorten_home
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    assert shorten_home(tmp_path / "VideoToLLM" / "lecture.jpg") == "~/VideoToLLM/lecture.jpg"
+
+
+def test_a_path_outside_home_is_left_alone(monkeypatch, tmp_path):
+    from app.services.citation import shorten_home
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path / "home"))
+    assert shorten_home("/mnt/archive/lecture.jpg") == "/mnt/archive/lecture.jpg"
+
+
+def test_a_sibling_of_home_is_not_mistaken_for_being_inside_it(monkeypatch, tmp_path):
+    """A home of `.../nav` must not swallow `.../navdeep`. The separator is the
+    guard, and a prefix match without it would rewrite somebody else's path.
+
+    Built from `tmp_path` rather than a literal `/Users/<name>` — the
+    pre-publish audit forbids an absolute home path in a tracked file, and it
+    caught this test when it was written the obvious way."""
+    from app.services.citation import shorten_home
+
+    home = tmp_path / "nav"
+    sibling = tmp_path / "navdeep" / "clip.jpg"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    assert shorten_home(sibling) == str(sibling)
+
+
+def test_an_unresolvable_home_does_not_break_printing_a_result(monkeypatch):
+    """A stripped environment is not a reason to raise while rendering
+    something the user asked for."""
+    from app.services.citation import shorten_home
+
+    def no_home(cls):
+        raise RuntimeError("no home directory")
+
+    monkeypatch.setattr(Path, "home", classmethod(no_home))
+    assert shorten_home("/anywhere/clip.jpg") == "/anywhere/clip.jpg"
+
+
+def test_the_paths_a_script_captures_are_not_shortened():
+    """`process` and `export` print paths for machines, `show` for people.
+
+    Issue #8 proposes `--quiet` so a script can capture the output path, and
+    `cd $(video-to-llm export ...)` does not expand a `~` that arrives inside a
+    variable. So the shortening stays on the human renderer only.
+    """
+    from pathlib import Path as _Path
+
+    source = (_Path(__file__).resolve().parents[2] / "app" / "cli" / "main.py").read_text()
+    assert "shorten_home(export_video_dir" not in source
+    assert "shorten_home(str(document" not in source
