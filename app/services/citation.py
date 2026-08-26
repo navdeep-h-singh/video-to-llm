@@ -17,6 +17,7 @@ no frames on disk says that instead of naming a file that is not there.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -224,29 +225,42 @@ def resolve_citation(
 
 
 def shorten_home(path: Path | str) -> str:
-    """Render a path with the home directory as `~`.
+    r"""Render a path with the home directory as `~`.
 
     Shorter to read, and it keeps the operator's account name out of output
-    people paste into issues and posts. A path outside home is returned
+    people paste into issues and posts. A path outside home comes back
     unchanged rather than mangled, and an unresolvable home — which happens on
     a stripped environment — falls back to the path as given rather than
     raising in the middle of printing a result.
-    """
-    text = str(path)
-    try:
-        home = Path.home()
-        candidates = {str(home), str(home.resolve())}
-    except (RuntimeError, OSError):
-        return text
 
-    # Both the raw and the resolved home, because they differ whenever the home
-    # directory is reached through a symlink — /tmp on macOS resolves to
-    # /private/tmp, and some sites symlink /home. Comparing only one of them
-    # silently stops shortening on exactly those machines.
-    for prefix in sorted(candidates, key=len, reverse=True):
-        if prefix and prefix != "/" and (text == prefix or text.startswith(prefix + "/")):
-            return "~" + text[len(prefix) :]
-    return text
+    Compared as paths, not as strings. The first version tested
+    ``text.startswith(home + "/")``, which is never true on Windows, where the
+    separator is a backslash — so it silently did nothing there while passing
+    every test on macOS. The separator in the result is the platform's own:
+    PowerShell understands `~`, and `~\Videos\clip.jpg` is what a Windows user
+    would expect to see.
+
+    Both the raw and the resolved home are tried, because they differ whenever
+    home is reached through a symlink: /tmp resolves to /private/tmp on macOS,
+    and some sites symlink /home.
+    """
+    candidate = Path(path)
+    try:
+        homes = [Path.home(), Path.home().resolve()]
+    except (RuntimeError, OSError):
+        return str(path)
+
+    for home in homes:
+        if str(home) in ("", os.sep):
+            continue
+        if candidate == home:
+            return "~"
+        try:
+            relative = candidate.relative_to(home)
+        except ValueError:
+            continue
+        return f"~{os.sep}{relative}"
+    return str(path)
 
 
 def format_citation(citation: Citation) -> str:

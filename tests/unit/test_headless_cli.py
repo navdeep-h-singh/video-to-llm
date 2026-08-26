@@ -482,10 +482,27 @@ def test_an_unprocessed_folder_refuses_to_export(tmp_path):
 
 
 def test_a_frame_path_inside_home_is_shortened(monkeypatch, tmp_path):
+    """Asserted with the platform's own separator.
+
+    Hardcoding `/` here passed on macOS and hid a real bug: the first
+    implementation compared `startswith(home + "/")`, which is never true on
+    Windows, so the shortening silently did nothing there. Both the test and
+    the code now go through path semantics rather than string surgery.
+    """
+    import os
+
     from app.services.citation import shorten_home
 
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
-    assert shorten_home(tmp_path / "VideoToLLM" / "lecture.jpg") == "~/VideoToLLM/lecture.jpg"
+    expected = f"~{os.sep}VideoToLLM{os.sep}lecture.jpg"
+    assert shorten_home(tmp_path / "VideoToLLM" / "lecture.jpg") == expected
+
+
+def test_home_itself_becomes_a_bare_tilde(monkeypatch, tmp_path):
+    from app.services.citation import shorten_home
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    assert shorten_home(tmp_path) == "~"
 
 
 def test_a_path_outside_home_is_left_alone(monkeypatch, tmp_path):
