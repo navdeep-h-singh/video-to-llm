@@ -182,6 +182,23 @@ def is_text(path: str) -> bool:
     return Path(path).suffix.lower() in TEXT_SUFFIXES
 
 
+#: Where the README's own images live. The image suffixes above exist to keep a
+#: user's video and its extracted frames out of the repository, and they caught
+#: the demo recording and the screenshots too — which are deliberate, reviewed,
+#: and the whole reason anyone can see what this produces without installing it.
+#: Only images, and only here: a video committed anywhere is still a finding.
+ARTWORK_DIR = "docs/assets/"
+ARTWORK_SUFFIXES = {".png", ".gif", ".jpg", ".jpeg", ".webp"}
+
+#: A published asset is downloaded by everyone who clones. Two megabytes is
+#: generous for a screenshot and tight enough to notice a mistake.
+MAX_ARTWORK_BYTES = 2_000_000
+
+
+def _is_published_artwork(path: str, suffix: str) -> bool:
+    return path.startswith(ARTWORK_DIR) and suffix in ARTWORK_SUFFIXES
+
+
 def audit() -> list[str]:
     findings: list[str] = []
     files = tracked_files()
@@ -192,8 +209,15 @@ def audit() -> list[str]:
     # 1 & 2 — file identity
     for path in files:
         suffix = Path(path).suffix.lower()
-        if suffix in FORBIDDEN_SUFFIXES:
+        if suffix in FORBIDDEN_SUFFIXES and not _is_published_artwork(path, suffix):
             findings.append(f"{path}: tracked file has forbidden extension '{suffix}'")
+        if _is_published_artwork(path, suffix):
+            size = (REPO / path).stat().st_size
+            if size > MAX_ARTWORK_BYTES:
+                findings.append(
+                    f"{path}: published artwork is {size / 1_000_000:.1f} MB, over the "
+                    f"{MAX_ARTWORK_BYTES / 1_000_000:.0f} MB cap — every clone pays for it"
+                )
         if path in FORBIDDEN_PATHS:
             findings.append(
                 f"{path}: real configuration file is tracked; only the template belongs here"
