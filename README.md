@@ -9,9 +9,14 @@
 <p align="center">
   <a href="https://github.com/navdeep-h-singh/video-to-llm/actions/workflows/ci.yml"><img src="https://github.com/navdeep-h-singh/video-to-llm/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <img src="https://img.shields.io/badge/python-3.11%20|%203.12%20|%203.13-blue" alt="Python 3.11 to 3.13">
-  <img src="https://img.shields.io/badge/tests-1%2C582-brightgreen" alt="1,582 tests">
+  <img src="https://img.shields.io/badge/tests-1%2C583-brightgreen" alt="1,583 tests">
   <img src="https://img.shields.io/badge/network-not%20required-ec3013" alt="Runs offline">
   <img src="https://img.shields.io/badge/licence-MIT-lightgrey" alt="MIT licence">
+</p>
+
+<p align="center">
+  <img src="docs/assets/demo.gif" width="760"
+       alt="Processing a lecture, reading the assembled document, then resolving a timestamp back to the frame behind it">
 </p>
 
 ---
@@ -176,6 +181,20 @@ video-to-llm start
 
 An interface on `127.0.0.1` with live progress, a frame reviewer, job control,
 and the collection builder. Closing the browser does not stop a job.
+
+<p align="center">
+  <img src="docs/assets/ui-review.png" width="820"
+       alt="The frame reviewer: a picture from the video beside the transcript around it, with the silent stretch marked">
+</p>
+
+The reviewer is the screen the citation claim rests on — the picture on the left
+is the frame at that timestamp, and the lines on the right are what was being
+said around it.
+
+<p align="center">
+  <img src="docs/assets/ui-collection.png" width="820"
+       alt="The collection builder: choosing already-processed videos, setting their order, and picking one document or numbered parts">
+</p>
 
 ## Collections
 

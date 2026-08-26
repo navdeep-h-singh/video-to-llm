@@ -111,3 +111,35 @@ def test_the_privacy_section_states_mechanisms_not_adjectives():
     text = _readme()
     assert "asserted at application construction" in text
     assert "No plaintext fallback is ever created" in text
+
+
+# ── Images the README points at ───────────────────────────────────────────
+
+
+def test_every_image_the_readme_references_is_in_the_repository():
+    """A missing asset renders on GitHub as a broken image icon.
+
+    This is the third time `.gitignore` has swallowed something that needed to
+    ship. `collections/` took the module that builds collections; the blanket
+    `*.png` and `*.gif` — there to keep somebody's extracted frames out of the
+    repository — took the demo recording and every screenshot. Both were
+    invisible locally, because the files are on disk either way.
+    """
+    import subprocess
+
+    tracked = set(
+        subprocess.run(
+            ["git", "ls-files"], cwd=REPO, capture_output=True, text=True, check=True
+        ).stdout.split()
+    )
+    referenced = re.findall(r'src="(docs/assets/[^"]+)"', _readme())
+    assert referenced, "the README references no local images at all"
+
+    missing_on_disk = [r for r in referenced if not (REPO / r).is_file()]
+    assert not missing_on_disk, f"referenced but not on disk: {missing_on_disk}"
+
+    untracked = [r for r in referenced if r not in tracked]
+    assert not untracked, (
+        f"referenced by the README but not tracked by git, so they render as "
+        f"broken images on GitHub: {untracked}"
+    )

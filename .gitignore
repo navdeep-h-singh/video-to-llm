@@ -80,6 +80,16 @@ dist/
 *.tiff
 *.webp
 
+# ...except the published artwork. The patterns above exist to keep somebody's
+# video and its extracted frames out of the repository, which is right — but
+# `docs/assets/` is where the demo recording, the interface screenshots and the
+# social preview live, and the README links to them. An ignored asset renders on
+# GitHub as a broken image icon, which is worse than having no screenshot.
+# `test_readme_claims.py` asserts every image the README references is tracked.
+!docs/assets/*.png
+!docs/assets/*.gif
+!docs/assets/*.jpg
+
 # ─── Processed output, exports, collections ───────────────────────────────
 output/
 outputs/
